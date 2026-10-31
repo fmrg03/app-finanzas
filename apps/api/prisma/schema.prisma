@@ -1,0 +1,171 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Currency {
+  USD
+  VES
+}
+
+enum RateSource {
+  BCV
+  PARALELO
+  MANUAL
+}
+
+enum AccountType {
+  CASH
+  BANK
+  CARD
+  WALLET
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+}
+
+enum TransactionSource {
+  MANUAL
+  IMPORT
+  API
+  RECEIPT
+}
+
+enum ReceiptStatus {
+  PENDING
+  EXTRACTED
+  CONFIRMED
+  FAILED
+}
+
+
+model User {
+  id               String     @id @default(cuid())
+  email            String     @unique
+  passwordHash     String
+  refreshTokenHash String?
+  defaultCurrency  Currency   @default(USD)
+  defaultRateSource RateSource @default(BCV)
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  accounts     Account[]
+  categories   Category[]
+  transactions Transaction[]
+  receipts     Receipt[]
+}
+
+model Account {
+  id             String      @id @default(cuid())
+  userId         String
+  name           String
+  type           AccountType
+  currency       Currency
+  initialBalance Decimal     @default(0) @db.Decimal(18, 2)
+  createdAt      DateTime    @default(now())
+  archivedAt     DateTime?
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([userId, name])
+}
+
+model Category {
+  id                String          @id @default(cuid())
+  userId            String
+  name              String
+  type              TransactionType
+  color             String          @default("#64748b")
+  icon              String?
+  parentId          String?
+  // Tasa que se preselecciona al cargar un gasto de esta categoría
+  defaultRateSource RateSource?
+  createdAt         DateTime        @default(now())
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Category[]    @relation("CategoryTree")
+  transactions Transaction[]
+
+  @@unique([userId, parentId, name])
+}
+
+// Tasa diaria. rate = bolívares (VES) por 1 USD.
+model ExchangeRate {
+  id        String     @id @default(cuid())
+  date      DateTime   @db.Date
+  source    RateSource
+  rate      Decimal    @db.Decimal(18, 6)
+  fetchedAt DateTime   @default(now())
+
+  transactions Transaction[]
+
+  @@unique([date, source])
+  @@index([date])
+}
+
+model Transaction {
+  id        String          @id @default(cuid())
+  userId    String
+  accountId String
+  categoryId String?
+  type      TransactionType
+  date      DateTime        @db.Date
+  description String?
+  tags      String[]
+
+  // Lo que el usuario escribió (en la moneda que eligió)
+  originalCurrency Currency
+  originalAmount   Decimal  @db.Decimal(18, 2)
+  // Snapshot: ambos valores calculados al momento de la transacción (inmutables)
+  amountUsd        Decimal  @db.Decimal(18, 2)
+  amountVes        Decimal  @db.Decimal(18, 2)
+  // Tasa exacta aplicada (VES por USD), copiada, no solo referenciada
+  rateUsed         Decimal  @db.Decimal(18, 6)
+  rateSource       RateSource
+  exchangeRateId   String?
+
+  // Preparación para automatización
+  source     TransactionSource @default(MANUAL)
+  externalId String?
+  rawData    Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account      Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  exchangeRate ExchangeRate? @relation(fields: [exchangeRateId], references: [id], onDelete: SetNull)
+  receipt      Receipt?
+
+  @@unique([userId, source, externalId])
+  @@index([userId, date])
+  @@index([userId, categoryId])
+  @@index([userId, accountId])
+}
+
+model Receipt {
+  id            String        @id @default(cuid())
+  userId        String
+  transactionId String?       @unique
+  filePath      String
+  fileHash      String
+  extractedJson Json?
+  status        ReceiptStatus @default(PENDING)
+  modelUsed     String?
+  confidence    Float?
+  createdAt     DateTime      @default(now())
+
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, fileHash])
+}

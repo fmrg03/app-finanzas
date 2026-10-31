@@ -1,0 +1,16 @@
+{
+  "name": "finanzas",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "dev:api": "pnpm --filter @finanzas/api start:dev",
+    "dev:web": "pnpm --filter @finanzas/web dev",
+    "build:shared": "pnpm --filter @finanzas/shared build"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@prisma/client", "@prisma/engines", "prisma", "@nestjs/core"]
+  }
+}
