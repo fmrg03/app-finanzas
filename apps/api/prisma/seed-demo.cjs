@@ -35,9 +35,12 @@ const addDays = (d, n) => new Date(d.getTime() + n * DAY);
 async function borrar() {
   const user = await prisma.user.findUnique({ where: { email: EMAIL } });
   if (user) {
-    // Primero movimientos y transferencias: las cuentas no se pueden borrar mientras los tengan
+    // Primero lo que apunta a cuentas y personas: no se pueden borrar mientras algo las use
+    await prisma.installmentPlan.deleteMany({ where: { userId: user.id } });
     await prisma.transaction.deleteMany({ where: { userId: user.id } });
     await prisma.transfer.deleteMany({ where: { userId: user.id } });
+    await prisma.debt.deleteMany({ where: { userId: user.id } });
+    await prisma.sharedExpense.deleteMany({ where: { userId: user.id } });
     await prisma.user.delete({ where: { id: user.id } });
   }
   const { count } = await prisma.exchangeRate.deleteMany({ where: { fetchedAt: DEMO_MARK } });
@@ -68,7 +71,11 @@ async function crear() {
   const tasasNuevas = await rellenarTasas(desde);
 
   const rates = await prisma.exchangeRate.findMany({ where: { date: { gte: desde, lte: today } } });
-  const rateOf = (date, source) => rates.find((r) => iso(r.date) === iso(date) && r.source === source).rate;
+  // Tasa del día o, si no hay (por ejemplo un día futuro que luego se descarta), la última anterior
+  const rateOf = (date, source) => {
+    const own = rates.filter((r) => r.source === source).sort((a, b) => a.date - b.date);
+    return (own.findLast((r) => r.date <= date) ?? own[0]).rate;
+  };
 
   const user = await prisma.user.create({
     data: { email: EMAIL, passwordHash: await bcrypt.hash(PASSWORD, 12), defaultCurrency: 'USD', defaultRateSource: 'BCV' },
@@ -119,6 +126,7 @@ async function crear() {
     txs.push({
       userId, accountId: account.id, categoryId: cat[category].id, type, date, description, tags,
       originalCurrency: currency, originalAmount: a, amountUsd: usd, amountVes: ves, rateUsed: rate, rateSource: source,
+      myAmountUsd: usd, myAmountVes: ves,
       // Los generados por un recurrente llevan su marca, igual que los de la API
       ...(recKey ? { source: 'RECURRING', externalId: `rec:${rec[recKey].id}:${iso(date)}` } : {}),
     });
@@ -203,16 +211,63 @@ async function crear() {
   }
 
   // Deudas: una mía en curso, una que me deben vencida y una ya saldada
-  const tia = await prisma.debt.create({ data: { userId, direction: 'I_OWE', person: 'Tía Carmen', description: 'Préstamo para el seguro del carro', currency: 'USD', amount: '200', dueDate: monthDay(30, 2) } });
+  const person = async (name, phone) => prisma.person.create({ data: { userId, name, phone } });
+  const P = { tia: await person('Tía Carmen'), luis: await person('Luis', '584141112233'), pedro: await person('Pedro'), ana: await person('Ana', '584121234567') };
+  const tia = await prisma.debt.create({ data: { userId, personId: P.tia.id, direction: 'I_OWE', person: 'Tía Carmen', description: 'Préstamo para el seguro del carro', currency: 'USD', amount: '200', dueDate: monthDay(30, 2) } });
   await prisma.debtPayment.create({ data: { debtId: tia.id, date: monthDay(1, -1), amount: '50' } });
   await prisma.debtPayment.create({ data: { debtId: tia.id, date: monthDay(1) <= today ? monthDay(1) : monthDay(1, -1), amount: '30' } });
-  await prisma.debt.create({ data: { userId, direction: 'OWED_TO_ME', person: 'Luis', description: 'Entradas del concierto', currency: 'VES', amount: '9800', dueDate: addDays(today, -6) } });
-  const pedro = await prisma.debt.create({ data: { userId, direction: 'I_OWE', person: 'Pedro', description: 'Almuerzo de la oficina', currency: 'USD', amount: '25', settledAt: addDays(today, -20) } });
+  await prisma.debt.create({ data: { userId, personId: P.luis.id, direction: 'OWED_TO_ME', person: 'Luis', description: 'Entradas del concierto', currency: 'VES', amount: '9800', dueDate: addDays(today, -6) } });
+  const pedro = await prisma.debt.create({ data: { userId, personId: P.pedro.id, direction: 'I_OWE', person: 'Pedro', description: 'Almuerzo de la oficina', currency: 'USD', amount: '25', settledAt: addDays(today, -20) } });
   await prisma.debtPayment.create({ data: { debtId: pedro.id, date: addDays(today, -20), amount: '25' } });
+
+  // Una cena compartida que pagué yo, a partes iguales con Ana y Luis (Ana ya pagó su parte)
+  const cenaDate = addDays(today, -3);
+  const cenaRate = rateOf(cenaDate, 'BCV');
+  const cena = await prisma.sharedExpense.create({
+    data: {
+      userId, splitMode: 'EQUAL', totalUsd: '48',
+      participants: { create: [{ personId: null, pct: '33.333333', amountUsd: '16' }, { personId: P.ana.id, pct: '33.333333', amountUsd: '16' }, { personId: P.luis.id, pct: '33.333334', amountUsd: '16' }] },
+    },
+  });
+  await prisma.transaction.create({
+    data: {
+      userId, accountId: acc.zinli.id, categoryId: cat['Comida fuera'].id, type: 'EXPENSE', date: cenaDate, description: 'Cena en Las Mercedes', tags: [],
+      originalCurrency: 'USD', originalAmount: '48', amountUsd: '48', amountVes: new D(48).mul(cenaRate).toDecimalPlaces(2), rateUsed: cenaRate, rateSource: 'BCV',
+      myAmountUsd: '16', myAmountVes: new D(16).mul(cenaRate).toDecimalPlaces(2), sharePct: '33.333333', sharedId: cena.id,
+    },
+  });
+  const dAna = await prisma.debt.create({ data: { userId, personId: P.ana.id, sharedId: cena.id, direction: 'OWED_TO_ME', person: 'Ana', description: 'Cena en Las Mercedes (compartido)', currency: 'USD', amount: '16' } });
+  await prisma.debtPayment.create({ data: { debtId: dAna.id, date: addDays(today, -1), amount: '16', accountId: acc.zinli.id } });
+  await prisma.debt.update({ where: { id: dAna.id }, data: { settledAt: addDays(today, -1) } });
+  await prisma.debt.create({ data: { userId, personId: P.luis.id, sharedId: cena.id, direction: 'OWED_TO_ME', person: 'Luis', description: 'Cena en Las Mercedes (compartido)', currency: 'USD', amount: '16' } });
+
+  // Una nevera con Cashea: 40 % de inicial y 3 cuotas cada 14 días; la primera ya pagada
+  const compra = addDays(today, -20);
+  const cRate = rateOf(compra, 'BCV');
+  const plan = await prisma.installmentPlan.create({
+    data: {
+      userId, provider: 'Cashea', store: 'Daka', description: 'Nevera', categoryId: cat['Hogar'].id, purchaseDate: compra, totalUsd: '480', downPaymentUsd: '192',
+      count: 3, frequency: 'DAYS_14', accountId: acc.zinli.id, rateSource: 'BCV', rateUsed: cRate,
+      installments: { create: [6, -8, -22].map((back, i) => ({ n: i + 1, dueDate: addDays(today, -back), amountUsd: '96' })) },
+    },
+    include: { installments: true },
+  });
+  const cashTx = (date, amount, description, rate) =>
+    prisma.transaction.create({
+      data: {
+        userId, accountId: acc.zinli.id, categoryId: cat['Hogar'].id, type: 'EXPENSE', date, description, tags: [], source: 'INSTALLMENT', installmentPlanId: plan.id,
+        originalCurrency: 'USD', originalAmount: amount, amountUsd: amount, amountVes: new D(amount).mul(rate).toDecimalPlaces(2), rateUsed: rate, rateSource: 'BCV',
+        myAmountUsd: amount, myAmountVes: new D(amount).mul(rate).toDecimalPlaces(2),
+      },
+    });
+  await cashTx(compra, '192', 'Cashea: Nevera (inicial)', cRate);
+  const c1 = plan.installments.find((i) => i.n === 1);
+  const paid1 = await cashTx(c1.dueDate, '96', 'Cashea: Nevera (cuota 1/3)', rateOf(c1.dueDate, 'BCV'));
+  await prisma.installment.update({ where: { id: c1.id }, data: { transactionId: paid1.id } });
 
   const mesActual = txs.filter((t) => t.date.getUTCMonth() === today.getUTCMonth()).length;
   console.log(`Listo: ${txs.length} movimientos y ${transfers.length} transferencias en ${MONTHS} meses (${mesActual} movimientos este mes), 4 cuentas y ${Object.keys(cat).length} categorías.`);
-  console.log('También: 4 recurrentes (uno pendiente de confirmar), 5 presupuestos, 2 metas y 3 deudas.');
+  console.log('También: 4 recurrentes (uno pendiente de confirmar), 5 presupuestos, 2 metas, 4 personas, una cena compartida, una compra en Cashea y 3 deudas.');
   console.log(`Tasas inventadas para días sin tasa real: ${tasasNuevas}.`);
   console.log(`Entra con ${EMAIL} / ${PASSWORD}`);
 }

@@ -18,6 +18,9 @@ import { BudgetsModule } from './budgets/budgets.module';
 import { GoalsModule } from './goals/goals.module';
 import { DebtsModule } from './debts/debts.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { PeopleModule } from './people/people.module';
+import { SharedModule } from './shared/shared.module';
+import { InstallmentsModule } from './installments/installments.module';
 
 @Controller('health')
 class HealthController {
@@ -48,6 +51,9 @@ class HealthController {
     GoalsModule,
     DebtsModule,
     NotificationsModule,
+    PeopleModule,
+    SharedModule,
+    InstallmentsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

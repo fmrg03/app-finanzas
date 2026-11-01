@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { CHART, LegendItem, MonthlyBars, MonthlyTable, PaceChart } from '@/components/charts';
 import { DueRecurring } from '@/components/due-recurring';
+import { UpcomingInstallments } from '@/components/upcoming-installments';
 import { budgetTone, Progress } from '@/components/progress';
 import { useBudgets } from '@/lib/planning';
 import { MonthNav, useMonth } from '@/components/month-nav';
@@ -42,6 +43,7 @@ export default function ResumenPage() {
       </header>
 
       <DueRecurring />
+      {nav.isCurrent && <UpcomingInstallments />}
 
       {q.isError && <div className="mt-6"><ErrorNote>{(q.error as Error).message}</ErrorNote></div>}
       {q.isPending && <p className="py-16 text-center text-muted">Cargando resumen…</p>}

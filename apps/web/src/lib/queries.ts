@@ -65,10 +65,10 @@ export interface TxInput {
 }
 
 /** Invalida todo lo que depende de los movimientos (lista, saldos de cuentas). */
-function useInvalidateMoney() {
+export function useInvalidateMoney() {
   const qc = useQueryClient();
   return () => {
-    for (const k of ['transactions', 'accounts', 'budgets', 'net-worth', 'recurring', 'notifications']) qc.invalidateQueries({ queryKey: [k] });
+    for (const k of ['transactions', 'accounts', 'budgets', 'net-worth', 'recurring', 'notifications', 'debts', 'people', 'installments']) qc.invalidateQueries({ queryKey: [k] });
   };
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowRight, Download, Plus, Search } from 'lucide-react';
+import { ArrowRight, CreditCard, Download, Plus, Search, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { AmountPair } from '@/components/amount';
 import { DueRecurring } from '@/components/due-recurring';
@@ -140,12 +140,24 @@ export default function MovimientosPage() {
                       <button onClick={() => setEditing({ kind: 'tx', tx: r.tx })} className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-canvas/60">
                         <span aria-hidden className="size-2.5 shrink-0 rounded-full" style={{ background: r.tx.category?.color ?? '#b6bfcc' }} />
                         <span className="min-w-0 flex-1">
-                          <span className="block truncate font-semibold">{r.tx.description || r.tx.category?.name || 'Sin descripción'}</span>
+                          <span className="flex items-center gap-1.5 font-semibold">
+                            <span className="truncate">{r.tx.description || r.tx.category?.name || 'Sin descripción'}</span>
+                            {r.tx.sharePct !== null && <Users size={14} className="shrink-0 text-accent" aria-label="Compartido" />}
+                            {r.tx.installmentPlanId && <CreditCard size={14} className="shrink-0 text-accent" aria-label="En cuotas" />}
+                          </span>
                           <span className="block truncate text-xs text-muted">
-                            {[r.tx.description ? r.tx.category?.name : null, r.tx.account.name].filter(Boolean).join(', ')}
+                            {[
+                              r.tx.description ? r.tx.category?.name : null,
+                              r.tx.account?.name ?? (r.tx.shared?.paidBy ? `Pagó ${r.tx.shared.paidBy.name}` : 'No salió de tus cuentas'),
+                            ].filter(Boolean).join(', ')}
                           </span>
                         </span>
-                        <AmountPair type={r.tx.type} usd={r.tx.amountUsd} ves={r.tx.amountVes} original={r.tx.originalCurrency} rate={r.tx.rateUsed} source={r.tx.rateSource} />
+                        <span className="flex flex-col items-end">
+                          <AmountPair type={r.tx.type} usd={r.tx.amountUsd} ves={r.tx.amountVes} original={r.tx.originalCurrency} rate={r.tx.rateUsed} source={r.tx.rateSource} />
+                          {r.tx.sharePct !== null && (
+                            <span className="text-xs font-semibold tabular-nums text-accent">tu parte {money(r.tx.myAmountUsd, 'USD')}</span>
+                          )}
+                        </span>
                       </button>
                     </li>
                   ) : (

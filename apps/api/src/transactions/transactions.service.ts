@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, RateSource, TransactionSource } from '@prisma/client';
 import { convertAmounts } from '../common/money.util';
 import { parseDateOnly, toDateOnly } from '../common/date.util';
@@ -10,13 +10,39 @@ const INCLUDE = {
   account: { select: { id: true, name: true, currency: true } },
   category: { select: { id: true, name: true, color: true, icon: true, parentId: true } },
   receipt: { select: { id: true } },
+  shared: {
+    select: {
+      id: true, splitMode: true, totalUsd: true,
+      paidBy: { select: { id: true, name: true, phone: true } },
+      participants: { select: { personId: true, pct: true, amountUsd: true, person: { select: { id: true, name: true, phone: true } } } },
+    },
+  },
+  installmentPlan: { select: { id: true, provider: true, description: true, count: true } },
+  installment: { select: { id: true, n: true } },
 } satisfies Prisma.TransactionInclude;
+
+export const TX_INCLUDE = INCLUDE;
+
+/** Datos para crear un movimiento desde otros módulos (compartidos, cuotas). */
+export interface InternalTxInput {
+  accountId: string | null;
+  categoryId: string | null;
+  type: 'INCOME' | 'EXPENSE';
+  date: string;
+  description?: string | null;
+  tags?: string[];
+}
+
+export type Snapshot = Awaited<ReturnType<TransactionsService['snapshot']>>;
 
 export interface CreateOptions {
   source?: TransactionSource;
   externalId?: string;
   rawData?: Prisma.InputJsonValue;
 }
+
+const D = Prisma.Decimal;
+const MONEY_FIELDS = ['currency', 'amount', 'date', 'rateSource', 'rate'] as const;
 
 @Injectable()
 export class TransactionsService {
@@ -40,22 +66,23 @@ export class TransactionsService {
         by: ['type'],
         where,
         orderBy: { type: 'asc' },
-        _sum: { amountUsd: true, amountVes: true },
+        _sum: { myAmountUsd: true, myAmountVes: true },
       }),
     ]);
 
     // Totales del filtro completo (no solo de la página), en ambas monedas
+    // En compartidos solo cuenta tu parte
     const tot = (t: 'INCOME' | 'EXPENSE') => sums.find((s) => s.type === t)?._sum;
     const inc = tot('INCOME');
     const exp = tot('EXPENSE');
     const z = new Prisma.Decimal(0);
     const totals = {
-      incomeUsd: (inc?.amountUsd ?? z).toFixed(2),
-      incomeVes: (inc?.amountVes ?? z).toFixed(2),
-      expenseUsd: (exp?.amountUsd ?? z).toFixed(2),
-      expenseVes: (exp?.amountVes ?? z).toFixed(2),
-      netUsd: new Prisma.Decimal(inc?.amountUsd ?? 0).sub(exp?.amountUsd ?? 0).toFixed(2),
-      netVes: new Prisma.Decimal(inc?.amountVes ?? 0).sub(exp?.amountVes ?? 0).toFixed(2),
+      incomeUsd: (inc?.myAmountUsd ?? z).toFixed(2),
+      incomeVes: (inc?.myAmountVes ?? z).toFixed(2),
+      expenseUsd: (exp?.myAmountUsd ?? z).toFixed(2),
+      expenseVes: (exp?.myAmountVes ?? z).toFixed(2),
+      netUsd: new Prisma.Decimal(inc?.myAmountUsd ?? 0).sub(exp?.myAmountUsd ?? 0).toFixed(2),
+      netVes: new Prisma.Decimal(inc?.myAmountVes ?? 0).sub(exp?.myAmountVes ?? 0).toFixed(2),
     };
 
     return { items: items.map(this.present), total, page: q.page, pageSize: q.pageSize, totals };
@@ -70,27 +97,39 @@ export class TransactionsService {
   async create(userId: string, dto: CreateTransactionDto, opts: CreateOptions = {}) {
     await this.assertAccount(userId, dto.accountId);
     const category = await this.assertCategory(userId, dto.categoryId ?? null, dto.type);
-    const snapshot = await this.computeSnapshot(userId, {
+    const snapshot = await this.snapshot(userId, {
       currency: dto.currency,
       amount: dto.amount,
       date: dto.date,
       rateSource: dto.rateSource ?? category?.defaultRateSource ?? undefined,
       rate: dto.rate,
     });
+    return this.insert(userId, { ...dto, categoryId: dto.categoryId ?? null }, snapshot, opts);
+  }
 
-    const tx = await this.prisma.transaction.create({
+  /** Guarda un movimiento con un snapshot ya calculado. Lo usan también compartidos y cuotas. */
+  async insert(
+    userId: string,
+    input: InternalTxInput,
+    snapshot: Snapshot,
+    opts: CreateOptions & { sharedId?: string; installmentPlanId?: string } = {},
+    db: Prisma.TransactionClient = this.prisma,
+  ) {
+    const tx = await db.transaction.create({
       data: {
         userId,
-        accountId: dto.accountId,
-        categoryId: dto.categoryId ?? null,
-        type: dto.type,
-        date: parseDateOnly(dto.date),
-        description: dto.description?.trim() || null,
-        tags: normalizeTags(dto.tags),
+        accountId: input.accountId,
+        categoryId: input.categoryId,
+        type: input.type,
+        date: parseDateOnly(input.date),
+        description: input.description?.trim() || null,
+        tags: normalizeTags(input.tags),
         ...snapshot,
         source: opts.source ?? 'MANUAL',
         externalId: opts.externalId,
         rawData: opts.rawData,
+        sharedId: opts.sharedId,
+        installmentPlanId: opts.installmentPlanId,
       },
       include: INCLUDE,
     });
@@ -102,29 +141,42 @@ export class TransactionsService {
    * monto, moneda, fecha, fuente de tasa o tasa; si no, queda congelado.
    */
   async update(userId: string, id: string, dto: UpdateTransactionDto) {
-    const current = await this.prisma.transaction.findFirst({ where: { id, userId } });
+    const current = await this.prisma.transaction.findFirst({ where: { id, userId }, include: { installment: { select: { id: true } } } });
     if (!current) throw new NotFoundException('Movimiento no encontrado');
+
+    const moneyChanged = MONEY_FIELDS.some((k) => dto[k] !== undefined);
+    const structural = moneyChanged || dto.accountId !== undefined || (dto.type !== undefined && dto.type !== current.type);
+    if (structural && current.sharedId) {
+      throw new ConflictException('Es un movimiento compartido: cambia montos, cuenta o fecha desde su reparto.');
+    }
+    if (structural && current.installmentPlanId && !current.installment) {
+      throw new ConflictException('Es la inicial de una compra en cuotas: para cambiar el monto, elimina la compra y regístrala de nuevo.');
+    }
+    if (structural && current.installment && !current.accountId) {
+      throw new ConflictException('Esta cuota la registra sola la compra en cuotas (la pagó otra persona).');
+    }
+    if (dto.type !== undefined && dto.type !== current.type && current.installmentPlanId) {
+      throw new ConflictException('Un pago de cuotas siempre es un gasto.');
+    }
 
     const type = dto.type ?? current.type;
     const categoryId = dto.categoryId === undefined ? current.categoryId : dto.categoryId;
     if (dto.accountId) await this.assertAccount(userId, dto.accountId);
     if (dto.type || dto.categoryId !== undefined) await this.assertCategory(userId, categoryId, type);
 
-    const moneyChanged = ['currency', 'amount', 'date', 'rateSource', 'rate'].some(
-      (k) => dto[k as keyof UpdateTransactionDto] !== undefined,
-    );
     let snapshot = {};
     if (moneyChanged) {
       const date = dto.date ?? toDateOnly(current.date);
       const rateSource = dto.rateSource ?? current.rateSource;
       // Si solo cambió algo distinto de la tasa y la fuente es MANUAL, se conserva la tasa manual previa
       const rate = dto.rate ?? (rateSource === 'MANUAL' && !dto.rateSource ? current.rateUsed.toString() : undefined);
-      snapshot = await this.computeSnapshot(userId, {
+      snapshot = await this.snapshot(userId, {
         currency: dto.currency ?? current.originalCurrency,
         amount: dto.amount ?? current.originalAmount.toString(),
         date,
         rateSource,
         rate,
+        sharePct: current.sharePct,
       });
     }
 
@@ -145,9 +197,35 @@ export class TransactionsService {
   }
 
   async remove(userId: string, id: string) {
-    const tx = await this.prisma.transaction.findFirst({ where: { id, userId }, select: { id: true } });
+    const tx = await this.prisma.transaction.findFirst({
+      where: { id, userId },
+      select: { id: true, accountId: true, sharedId: true, installmentPlanId: true, installment: { select: { id: true } } },
+    });
     if (!tx) throw new NotFoundException('Movimiento no encontrado');
+    if (tx.installmentPlanId && !tx.installment) {
+      throw new ConflictException('Es la inicial de una compra en cuotas: elimina la compra completa desde Deudas → Cuotas.');
+    }
+    if (tx.installment && !tx.accountId) {
+      throw new ConflictException('Esta cuota la registra sola la compra en cuotas (la pagó otra persona).');
+    }
+    if (tx.sharedId) {
+      // Borrar un compartido borra también las deudas que generó, salvo que ya tengan abonos
+      await this.assertNoPayments(tx.sharedId);
+      await this.prisma.$transaction([
+        this.prisma.transaction.delete({ where: { id } }),
+        this.prisma.sharedExpense.delete({ where: { id: tx.sharedId } }),
+      ]);
+      return;
+    }
     await this.prisma.transaction.delete({ where: { id } });
+  }
+
+  /** Un reparto con abonos ya registrados no se puede rehacer ni borrar sin perder esos abonos. */
+  async assertNoPayments(sharedId: string) {
+    const paid = await this.prisma.debtPayment.findFirst({ where: { debt: { sharedId } }, select: { debt: { select: { person: true } } } });
+    if (paid) {
+      throw new ConflictException(`${paid.debt.person} ya registró abonos de esta compra. Borra esos abonos en Deudas antes de cambiar o eliminar el reparto.`);
+    }
   }
 
   /** Todas las etiquetas usadas, para autocompletar. */
@@ -160,9 +238,16 @@ export class TransactionsService {
 
   // ---------------------------------------------------------------------------
 
-  private async computeSnapshot(
+  /**
+   * Calcula montos en ambas monedas con la tasa que corresponda.
+   * sharePct: tu porcentaje si es compartido; myAmountUsd lo fija exacto (el reparto ya redondeado).
+   */
+  async snapshot(
     userId: string,
-    p: { currency: 'USD' | 'VES'; amount: string; date: string; rateSource?: RateSource; rate?: string },
+    p: {
+      currency: 'USD' | 'VES'; amount: string; date: string; rateSource?: RateSource; rate?: string;
+      sharePct?: Prisma.Decimal | null; myAmountUsd?: Prisma.Decimal;
+    },
   ) {
     const amount = new Prisma.Decimal(p.amount);
     if (amount.lte(0)) throw new BadRequestException('El monto debe ser mayor que cero (el tipo indica si es ingreso o egreso)');
@@ -194,6 +279,7 @@ export class TransactionsService {
       originalAmount: amount,
       amountUsd,
       amountVes,
+      ...myShare(amountUsd, amountVes, p.sharePct ?? null, p.myAmountUsd),
       rateUsed,
       // Una tasa escrita a mano se registra como MANUAL aunque se haya pedido otra fuente
       rateSource: p.rate !== undefined ? ('MANUAL' as const) : rateSource,
@@ -201,14 +287,14 @@ export class TransactionsService {
     };
   }
 
-  private async assertAccount(userId: string, accountId: string) {
+  async assertAccount(userId: string, accountId: string) {
     const acc = await this.prisma.account.findFirst({ where: { id: accountId, userId } });
     if (!acc) throw new BadRequestException('La cuenta no existe');
     if (acc.archivedAt) throw new BadRequestException('La cuenta está archivada');
     return acc;
   }
 
-  private async assertCategory(userId: string, categoryId: string | null, type: 'INCOME' | 'EXPENSE') {
+  async assertCategory(userId: string, categoryId: string | null, type: 'INCOME' | 'EXPENSE') {
     if (!categoryId) return null;
     const cat = await this.prisma.category.findFirst({ where: { id: categoryId, userId } });
     if (!cat) throw new BadRequestException('La categoría no existe');
@@ -246,7 +332,15 @@ export class TransactionsService {
   }
 
   /** Formato de salida: fecha como YYYY-MM-DD y decimales como string (sin perder precisión). */
-  private present = <T extends { date: Date }>(tx: T) => ({ ...tx, date: toDateOnly(tx.date) });
+  present = <T extends { date: Date }>(tx: T) => ({ ...tx, date: toDateOnly(tx.date) });
+}
+
+/** Tu parte de un movimiento. Sin porcentaje es el monto completo. */
+export function myShare(amountUsd: Prisma.Decimal, amountVes: Prisma.Decimal, sharePct: Prisma.Decimal | null, exactUsd?: Prisma.Decimal) {
+  if (sharePct === null) return { sharePct: null, myAmountUsd: amountUsd, myAmountVes: amountVes };
+  const usd = exactUsd ?? amountUsd.mul(sharePct).div(100).toDecimalPlaces(2, D.ROUND_HALF_UP);
+  const ves = amountUsd.isZero() ? new D(0) : amountVes.mul(usd).div(amountUsd).toDecimalPlaces(2, D.ROUND_HALF_UP);
+  return { sharePct, myAmountUsd: usd, myAmountVes: ves };
 }
 
 function normalizeTags(tags?: string[]) {

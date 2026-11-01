@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useState } from 'react';
 import { DevaluationBars, NetWorthChart } from '@/components/charts';
 import { ErrorNote, Segmented } from '@/components/ui/controls';
@@ -35,6 +36,11 @@ export default function PatrimonioPage() {
             {first && (
               <p className={cn('mt-2 font-semibold', change >= 0 ? 'text-income' : 'text-expense')}>
                 {change >= 0 ? '+' : '−'}{money(Math.abs(change), 'USD')} desde el cierre de {first.month === d.months[d.months.length - 1].month ? 'este mes' : monthName(first.month)}
+              </p>
+            )}
+            {Number(d.pendingInstallmentsUsd) > 0 && (
+              <p className="mt-2 text-sm text-muted">
+                Tienes <Link href="/deudas?tab=cuotas" className="font-semibold text-ink hover:underline">{money(d.pendingInstallmentsUsd, 'USD')} en cuotas por pagar</Link>, que todavía no salen de tus cuentas.
               </p>
             )}
             <div className="mt-4"><NetWorthChart data={d.months} /></div>

@@ -36,6 +36,7 @@ enum TransactionSource {
   API
   RECEIPT
   RECURRING
+  INSTALLMENT
 }
 
 enum RecurrenceFrequency {
@@ -57,6 +58,22 @@ enum NotificationType {
   GOAL_DEADLINE_NEAR
   GOAL_BEHIND
   GOAL_MISSED
+  INSTALLMENT_DUE
+  INSTALLMENT_OVERDUE
+}
+
+// Cómo se reparte un movimiento compartido
+enum SplitMode {
+  EQUAL
+  PERCENT
+  AMOUNT
+}
+
+// Cada cuánto vence una cuota de una compra en cuotas
+enum InstallmentFrequency {
+  DAYS_14
+  DAYS_15
+  MONTHLY
 }
 
 enum ReceiptStatus {
@@ -86,6 +103,9 @@ model User {
   goals         SavingsGoal[]
   debts         Debt[]
   notifications Notification[]
+  persons          Person[]
+  sharedExpenses   SharedExpense[]
+  installmentPlans InstallmentPlan[]
 }
 
 model Account {
@@ -103,6 +123,8 @@ model Account {
   transfersFrom Transfer[]    @relation("TransferFrom")
   transfersTo   Transfer[]    @relation("TransferTo")
   recurrings    Recurring[]
+  debtPayments  DebtPayment[]
+  installmentPlans InstallmentPlan[]
 
   @@unique([userId, name])
 }
@@ -125,6 +147,7 @@ model Category {
   transactions Transaction[]
   recurrings   Recurring[]
   budget       Budget?
+  installmentPlans InstallmentPlan[]
 
   @@unique([userId, parentId, name])
 }
@@ -146,7 +169,8 @@ model ExchangeRate {
 model Transaction {
   id          String          @id @default(cuid())
   userId      String
-  accountId   String
+  // Vacío solo en gastos compartidos que pagó otra persona: tu parte cuenta como gasto pero no sale de tus cuentas
+  accountId   String?
   categoryId  String?
   type        TransactionType
   date        DateTime        @db.Date
@@ -164,6 +188,14 @@ model Transaction {
   rateSource       RateSource
   exchangeRateId   String?
 
+  // Lo que cuenta como gasto/ingreso tuyo (resumen, presupuestos). Igual al monto, salvo en compartidos
+  myAmountUsd      Decimal    @db.Decimal(18, 2)
+  myAmountVes      Decimal    @db.Decimal(18, 2)
+  // Tu porcentaje en un movimiento compartido (null = 100 %)
+  sharePct         Decimal?   @db.Decimal(9, 6)
+  sharedId          String?   @unique
+  installmentPlanId String?
+
   // Preparación para automatización
   source     TransactionSource @default(MANUAL)
   externalId String?
@@ -173,15 +205,19 @@ model Transaction {
   updatedAt DateTime @updatedAt
 
   user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account      Account       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account      Account?      @relation(fields: [accountId], references: [id], onDelete: Restrict)
   category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   exchangeRate ExchangeRate? @relation(fields: [exchangeRateId], references: [id], onDelete: SetNull)
   receipt      Receipt?
+  shared          SharedExpense?   @relation(fields: [sharedId], references: [id], onDelete: SetNull)
+  installmentPlan InstallmentPlan? @relation(fields: [installmentPlanId], references: [id], onDelete: Cascade)
+  installment     Installment?
 
   @@unique([userId, source, externalId])
   @@index([userId, date])
   @@index([userId, categoryId])
   @@index([userId, accountId])
+  @@index([installmentPlanId])
 }
 
 model Receipt {
@@ -308,6 +344,9 @@ model Debt {
   userId      String
   direction   DebtDirection
   person      String
+  personId    String?
+  // Deuda creada por un movimiento compartido (siempre en USD, fijada con la tasa del día de la compra)
+  sharedId    String?
   description String?
   currency    Currency
   amount      Decimal       @db.Decimal(18, 2)
@@ -316,10 +355,14 @@ model Debt {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
 
-  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  personRef Person?       @relation(fields: [personId], references: [id], onDelete: SetNull)
+  shared   SharedExpense? @relation(fields: [sharedId], references: [id], onDelete: Cascade)
   payments DebtPayment[]
 
   @@index([userId])
+  @@index([personId])
+  @@index([sharedId])
 }
 
 model DebtPayment {
@@ -328,9 +371,14 @@ model DebtPayment {
   date      DateTime @db.Date
   amount    Decimal  @db.Decimal(18, 2)
   note      String?
+  // Cuenta donde entró (me pagaron) o de donde salió (pagué) el abono; mueve su saldo sin ser ingreso ni gasto
+  accountId     String?
+  // Monto en la moneda de la cuenta, si es distinta de la de la deuda
+  accountAmount Decimal? @db.Decimal(18, 2)
   createdAt DateTime @default(now())
 
-  debt Debt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  debt    Debt     @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  account Account? @relation(fields: [accountId], references: [id], onDelete: Restrict)
 
   @@index([debtId])
 }
@@ -351,4 +399,104 @@ model Notification {
 
   @@unique([userId, dedupeKey])
   @@index([userId, createdAt])
+}
+
+// Persona con la que compartes gastos o tienes deudas
+model Person {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  // Número de WhatsApp con código de país, solo dígitos (ej. 584121234567)
+  phone     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  debts        Debt[]
+  participants SharedParticipant[]
+  paidShared   SharedExpense[]
+
+  @@unique([userId, name])
+}
+
+// Reparto de una compra entre varias personas. Montos en USD fijados con la tasa del día de la compra.
+model SharedExpense {
+  id             String    @id @default(cuid())
+  userId         String
+  // null: pagaste tú
+  paidByPersonId String?
+  splitMode      SplitMode
+  totalUsd       Decimal   @db.Decimal(18, 2)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paidBy       Person?             @relation(fields: [paidByPersonId], references: [id], onDelete: Restrict)
+  participants SharedParticipant[]
+  debts        Debt[]
+  transaction  Transaction?
+  plan         InstallmentPlan?
+
+  @@index([userId])
+}
+
+model SharedParticipant {
+  id        String  @id @default(cuid())
+  sharedId  String
+  // null: tú
+  personId  String?
+  pct       Decimal @db.Decimal(9, 6)
+  amountUsd Decimal @db.Decimal(18, 2)
+
+  shared SharedExpense @relation(fields: [sharedId], references: [id], onDelete: Cascade)
+  person Person?       @relation(fields: [personId], references: [id], onDelete: Restrict)
+
+  @@index([sharedId])
+}
+
+// Compra en cuotas (Cashea y similares): inicial al comprar y cuotas fijas en USD
+model InstallmentPlan {
+  id             String               @id @default(cuid())
+  userId         String
+  provider       String
+  store          String?
+  description    String
+  categoryId     String?
+  purchaseDate   DateTime             @db.Date
+  totalUsd       Decimal              @db.Decimal(18, 2)
+  downPaymentUsd Decimal              @db.Decimal(18, 2)
+  count          Int
+  frequency      InstallmentFrequency
+  // Cuenta con la que se pagó la inicial (vacía si la compra la hizo otra persona)
+  accountId      String?
+  rateSource     RateSource
+  rateUsed       Decimal              @db.Decimal(18, 6)
+  sharedId       String?              @unique
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  account      Account?      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  shared       SharedExpense? @relation(fields: [sharedId], references: [id], onDelete: SetNull)
+  installments Installment[]
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+model Installment {
+  id            String    @id @default(cuid())
+  planId        String
+  n             Int
+  dueDate       DateTime  @db.Date
+  amountUsd     Decimal   @db.Decimal(18, 2)
+  // Movimiento con el que se pagó; vacío = pendiente
+  transactionId String?   @unique
+
+  plan        InstallmentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  transaction Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([planId, n])
+  @@index([dueDate])
 }

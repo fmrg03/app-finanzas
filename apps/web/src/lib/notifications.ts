@@ -6,7 +6,9 @@ import { api } from './api';
 export type NotificationType = 'BUDGET_NEAR' | 'BUDGET_EXCEEDED' | 'RECURRING_DUE' | 'DEBT_OVERDUE' | 'GOAL_REACHED'
   | 'GOAL_DEADLINE_NEAR'
   | 'GOAL_BEHIND'
-  | 'GOAL_MISSED';
+  | 'GOAL_MISSED'
+  | 'INSTALLMENT_DUE'
+  | 'INSTALLMENT_OVERDUE';
 export interface AppNotification {
   id: string;
   type: NotificationType;

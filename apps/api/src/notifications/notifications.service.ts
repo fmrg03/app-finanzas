@@ -11,6 +11,8 @@ export const BUDGET_NEAR_REMAINING_PCT = 5;
 export const GOAL_DEADLINE_DAYS = [30, 7];
 /** Desde este día del mes se recuerda el aporte mensual si va atrasado. */
 export const GOAL_REMINDER_DAY = 20;
+/** Días antes del vencimiento de una cuota en que se avisa. */
+export const INSTALLMENT_NOTICE_DAYS = 2;
 
 interface Candidate {
   type: NotificationType;
@@ -38,7 +40,7 @@ export class NotificationsService {
   async list(userId: string, limit = 30) {
     await this.evaluateSafe(userId);
     const [items, unread] = await Promise.all([
-      this.prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: limit }),
+      this.prisma.notification.findMany({ where: { userId }, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: limit }),
       this.prisma.notification.count({ where: { userId, readAt: null } }),
     ]);
     return { unread, items };
@@ -82,6 +84,7 @@ export class NotificationsService {
       ...(await this.recurringCandidates(userId)),
       ...(await this.debtCandidates(userId)),
       ...(await this.goalCandidates(userId)),
+      ...(await this.installmentCandidates(userId)),
     ];
     if (!candidates.length) return 0;
     const { count } = await this.prisma.notification.createMany({
@@ -151,6 +154,37 @@ export class NotificationsService {
         title: mine ? `Venció tu deuda con ${d.person}` : `${d.person} no te ha pagado`,
         body: `${mine ? 'Debes' : 'Te debe'} ${money(remaining, d.currency)} desde el ${dmy(d.dueDate!)}.`,
         link: '/deudas',
+      };
+    });
+  }
+
+  /** Cuotas que te tocan pagar a ti: aviso unos días antes y otro si se vencen. */
+  private async installmentCandidates(userId: string): Promise<Candidate[]> {
+    const today = parseDateOnly(todayLocal());
+    const limit = new Date(today.getTime() + INSTALLMENT_NOTICE_DAYS * 86_400_000);
+    const items = await this.prisma.installment.findMany({
+      where: { transactionId: null, dueDate: { lte: limit }, plan: { userId, OR: [{ sharedId: null }, { shared: { paidByPersonId: null } }] } },
+      include: { plan: { select: { provider: true, description: true, count: true } } },
+    });
+    return items.map((i) => {
+      const days = Math.round((i.dueDate.getTime() - today.getTime()) / 86_400_000);
+      const what = `${i.plan.provider}: ${i.plan.description}`;
+      if (days < 0) {
+        return {
+          type: 'INSTALLMENT_OVERDUE' as const,
+          dedupeKey: `inst:${i.id}:overdue`,
+          title: `Cuota vencida de ${what}`,
+          body: `La cuota ${i.n} de ${i.plan.count} por ${usd(i.amountUsd)} venció el ${dmy(i.dueDate)}. Si ya la pagaste, regístrala en Deudas → Cuotas.`,
+          link: '/deudas?tab=cuotas',
+        };
+      }
+      const when = days === 0 ? 'vence hoy' : days === 1 ? 'vence mañana' : `vence el ${dmy(i.dueDate)}`;
+      return {
+        type: 'INSTALLMENT_DUE' as const,
+        dedupeKey: `inst:${i.id}:due`,
+        title: `Se acerca una cuota de ${what}`,
+        body: `La cuota ${i.n} de ${i.plan.count} por ${usd(i.amountUsd)} ${when}.`,
+        link: '/deudas?tab=cuotas',
       };
     });
   }

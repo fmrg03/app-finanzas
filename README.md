@@ -45,15 +45,15 @@ Aparece el botón **Leer factura** al crear un movimiento. Usa `claude-haiku-5-5
 | Sección | Qué incluye |
 |---|---|
 | Resumen | Gasto del mes contra el mes anterior al mismo día, ingresos, gastos y balance, presupuestos más comprometidos, gasto por categoría y los últimos 6 meses, en USD o Bs |
-| Movimientos | Gastos, ingresos y transferencias por día, con filtros, búsqueda, conversión en vivo, lectura de facturas y descarga en Excel |
+| Movimientos | Gastos, ingresos y transferencias por día, con filtros, búsqueda, conversión en vivo, lectura de facturas y descarga en Excel. Un gasto puede ser **compartido** (por partes iguales, % o montos) o **en cuotas** (Cashea y similares), o ambas cosas |
 | Transferencias | Entre cuentas propias, con comisión. Si cambian de moneda, guarda la tasa que te dieron y la compara con la BCV |
 | Cuentas | Saldo de cada cuenta en su moneda, archivar |
 | Patrimonio | Total en USD mes a mes y cuánto valor perdieron los bolívares que tenías guardados |
 | Presupuestos | Tope mensual en USD por categoría, con alerta al 80 % y proyección a fin de mes |
 | Recurrentes | Sueldo, servicios y suscripciones: automáticos o con confirmación del monto de cada mes |
 | Metas | Objetivo en USD, aportes y retiros, aporte mensual propuesto (o el necesario para llegar a tiempo) y cuánto llevas este mes |
-| Deudas | Lo que debes y lo que te deben, con abonos y vencimientos |
-| Notificaciones | Campanita con avisos: cuando te queda el 5 % de un presupuesto y cuando te pasas, recurrentes por confirmar, deudas vencidas, y en metas: fecha cerca (30 y 7 días), aporte del mes atrasado, mes sin cumplir, fecha vencida sin llegar y meta cumplida. Aviso emergente en el momento en que ocurre |
+| Deudas y cuotas | Lo que debes y te deben (con abonos que entran o salen de una cuenta), compras en cuotas con su calendario y pago de cada cuota, y personas con su WhatsApp para mandar el detalle o recordar lo pendiente |
+| Notificaciones | Campanita con avisos: cuando te queda el 5 % de un presupuesto y cuando te pasas, recurrentes por confirmar, deudas vencidas, cuotas que vencen en 2 días o ya vencidas, y en metas: fecha cerca (30 y 7 días), aporte del mes atrasado, mes sin cumplir, fecha vencida sin llegar y meta cumplida. Aviso emergente en el momento en que ocurre |
 | Tasas | BCV y paralelo del día, historial por mes, carga o corrección manual |
 | Ajustes | Moneda y tasa predeterminadas, categorías, cambio de contraseña |
 
@@ -74,6 +74,9 @@ Todos bajo `/api` con `Authorization: Bearer <accessToken>`. Login y refresh dej
 | Deudas | `GET/POST /debts`, `PATCH/DELETE /debts/:id`, `POST /debts/:id/payments`, `DELETE /debts/:id/payments/:pid` |
 | Resumen | `GET /stats/overview?from&to&months`, `GET /stats/net-worth?months` |
 | Excel | `GET /transactions/export` (mismos filtros que el listado) |
+| Personas | `GET/POST /people`, `PATCH/DELETE /people/:id` |
+| Compartidos | `POST /shared-expenses`, `GET/PUT /shared-expenses/:id` (id del movimiento; se borra con `DELETE /transactions/:id`) |
+| Cuotas | `GET/POST /installment-plans`, `GET /installment-plans/upcoming?days`, `GET/PATCH/DELETE /installment-plans/:id`, `POST/DELETE /installments/:id/pay` |
 | Notificaciones | `GET /notifications`, `POST /notifications/read-all`, `POST /notifications/:id/read`, `DELETE /notifications/:id` |
 | Facturas | `GET /receipts/status`, `POST /receipts` (multipart `file`), `POST /receipts/:id/confirm`, `GET /receipts/:id/file` |
 
@@ -91,6 +94,9 @@ Todos bajo `/api` con `Authorization: Bearer <accessToken>`. Login y refresh dej
 - Recurrentes: cada ocurrencia se registra con `externalId = rec:<id>:<fecha>`, así nunca se duplica aunque el proceso corra dos veces. Si la API estuvo apagada, al arrancar registra lo atrasado (hasta 24 ocurrencias).
 - Notificaciones: la API revisa las condiciones cada vez que se consultan (la web lo hace al abrir, cada minuto y después de cada cambio) y guarda cada aviso con una clave única, así nunca se repite. Un presupuesto avisa una vez por mes al quedar el 5 % (`BUDGET_NEAR_REMAINING_PCT`) y otra al pasarse; si cambias el tope, vuelve a avisar sobre el nuevo monto.
 - Alertas de metas: el plan de cada mes es el aporte mensual que pusiste o, si no pusiste, lo necesario para llegar a la fecha. Desde el día 20 (`GOAL_REMINDER_DAY`) avisa si vas atrasado en el mes, y al empezar el mes siguiente avisa si no se cumplió (solo si la meta existía el mes completo). La fecha avisa a 30 y 7 días (`GOAL_DEADLINE_DAYS`) y, si pasa sin llegar, una última vez sugiriendo mover la fecha o ajustar el objetivo. Una meta cumplida no recibe más alertas.
+- **Compartidos:** tu gasto es solo tu parte (`myAmountUsd/myAmountVes`), y eso es lo que cuentan el resumen, los presupuestos y los totales; el saldo de la cuenta sí refleja el monto completo que salió. Si pagaste tú, cada persona te debe su parte; si pagó otra, tú le debes la tuya y tus cuentas no se tocan. Las deudas se fijan en USD con la tasa del día de la compra. Los centavos que sobran al repartir los pone quien pagó. Si alguien ya abonó, el reparto no se puede rehacer ni borrar sin quitar antes esos abonos.
+- **Abonos de deudas:** pueden entrar o salir de una cuenta (mueven su saldo, no son ingreso ni gasto). Si la cuenta es de otra moneda se convierten con la BCV del día o la tasa que indiques.
+- **Compras en cuotas:** el total se fija en USD el día de la compra. La inicial cuenta como gasto ese día y cada cuota el día que la pagas (no el de la compra), con la tasa de ese día. Cuotas iguales a centavos; la última absorbe la diferencia. Si la compra es compartida, solo tu porcentaje de cada pago cuenta como gasto. Si la compra la hizo otra persona, tu parte de cada cuota se registra sola en su fecha (al arrancar la API, a las 00:05 y 06:05 de Caracas y al abrir Cuotas), sin tocar tus cuentas.
 - Presupuestos y metas van en USD: en Bs se desactualizarían solos con la devaluación.
 - Patrimonio y devaluación: los saldos en Bs se convierten con la BCV de cada fecha. La pérdida por devaluación de un mes es lo que valían en USD los Bs del inicio del mes menos lo que valen al cierre (aproximación que ignora los movimientos dentro del mes).
 
@@ -126,4 +132,5 @@ Guarda copias fuera del servidor de vez en cuando. Las fotos de facturas están 
 
 ## Pendiente
 - Tasas históricas: se guardan desde que la app empezó a correr. Para fechas anteriores, carga la tasa en **Tasas** o usa una tasa manual en el movimiento.
+- Una compra en cuotas guarda la inicial y las cuotas con el monto con que se creó: para cambiar el total o el número de cuotas, se elimina y se registra de nuevo.
 - Siguiente fase: registro automático de pagos con Apple Pay (Atajos del iPhone) e importación de estados de cuenta del banco.

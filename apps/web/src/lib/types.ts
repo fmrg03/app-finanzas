@@ -36,11 +36,84 @@ export interface Transaction {
   amountVes: string;
   rateUsed: string;
   rateSource: RateSource;
-  accountId: string;
+  /** null solo en compartidos que pagó otra persona */
+  accountId: string | null;
   categoryId: string | null;
-  account: { id: string; name: string; currency: Currency };
+  account: { id: string; name: string; currency: Currency } | null;
   category: { id: string; name: string; color: string; icon: string | null; parentId: string | null } | null;
   receipt: { id: string } | null;
+  source: 'MANUAL' | 'IMPORT' | 'API' | 'RECEIPT' | 'RECURRING' | 'INSTALLMENT';
+  /** Lo que cuenta como tuyo (igual al monto salvo en compartidos) */
+  myAmountUsd: string;
+  myAmountVes: string;
+  sharePct: string | null;
+  sharedId: string | null;
+  shared: SharedInfo | null;
+  installmentPlanId: string | null;
+  installmentPlan: { id: string; provider: string; description: string; count: number } | null;
+  installment: { id: string; n: number } | null;
+}
+
+export type SplitMode = 'EQUAL' | 'PERCENT' | 'AMOUNT';
+export interface PersonRef { id: string; name: string; phone: string | null }
+export interface SharedInfo {
+  id: string;
+  splitMode: SplitMode;
+  totalUsd: string;
+  paidBy: PersonRef | null;
+  participants: { personId: string | null; pct: string; amountUsd: string; person: PersonRef | null }[];
+}
+export interface SplitInput {
+  paidByPersonId: string | null;
+  mode: SplitMode;
+  participants: { personId: string | null; value?: string }[];
+}
+
+export interface Person extends PersonRef {
+  openDebts: number;
+  owedToMeUsd: string;
+  owedToMeVes: string;
+  iOweUsd: string;
+  iOweVes: string;
+}
+
+export type InstallmentFrequency = 'DAYS_14' | 'DAYS_15' | 'MONTHLY';
+export const FREQUENCY_LABEL: Record<InstallmentFrequency, string> = { DAYS_14: 'Cada 14 días', DAYS_15: 'Cada 15 días', MONTHLY: 'Mensual' };
+export interface Installment {
+  id: string;
+  n: number;
+  dueDate: string;
+  amountUsd: string;
+  transactionId: string | null;
+  overdue: boolean;
+  transaction: { id: string; date: string; amountUsd: string; amountVes: string; originalCurrency: Currency; account: { id: string; name: string } | null } | null;
+}
+export interface InstallmentPlan {
+  id: string;
+  provider: string;
+  store: string | null;
+  description: string;
+  categoryId: string | null;
+  category: { id: string; name: string; color: string } | null;
+  account: { id: string; name: string; currency: Currency } | null;
+  purchaseDate: string;
+  totalUsd: string;
+  downPaymentUsd: string;
+  count: number;
+  frequency: InstallmentFrequency;
+  rateUsed: string;
+  shared: (SharedInfo & { paidByPersonId: string | null }) | null;
+  installments: Installment[];
+  paidByMe: boolean;
+  myPct: string | null;
+  paidCount: number;
+  paidUsd: string;
+  remainingUsd: string;
+  nextDue: { id: string; n: number; dueDate: string; amountUsd: string; overdue: boolean } | null;
+}
+export interface UpcomingInstallments {
+  totalUsd: string;
+  items: { id: string; n: number; dueDate: string; amountUsd: string; plan: { id: string; provider: string; description: string; count: number } }[];
 }
 
 export interface TxList {
@@ -186,10 +259,14 @@ export interface Debt {
   amount: string;
   dueDate: string | null;
   settledAt: string | null;
-  payments: { id: string; date: string; amount: string; note: string | null }[];
+  payments: { id: string; date: string; amount: string; note: string | null; accountAmount: string | null; account: { id: string; name: string; currency: Currency } | null }[];
   paid: string;
   remaining: string;
   overdue: boolean;
+  personId: string | null;
+  personRef: PersonRef | null;
+  sharedId: string | null;
+  fromShared: boolean;
 }
 
 export interface NetWorth {
@@ -197,6 +274,7 @@ export interface NetWorth {
   rate: string | null;
   totalUsd: string;
   devaluationTotalUsd: string;
+  pendingInstallmentsUsd: string;
   accounts: { id: string; name: string; type: AccountType; currency: Currency; archived: boolean; balance: string; balanceUsd: string | null }[];
   months: { month: string; date: string; rate: string | null; usd: string; ves: string; vesInUsd: string | null; netUsd: string; devaluationUsd: string }[];
 }

@@ -65,9 +65,9 @@ export class BudgetsService {
     const sums = await this.prisma.transaction.groupBy({
       by: ['categoryId'],
       where: { userId, type: 'EXPENSE', categoryId: { in: ids }, date: { gte: from, lte: to } },
-      _sum: { amountUsd: true },
+      _sum: { myAmountUsd: true },
     });
-    const spentOf = (id: string) => sums.find((s) => s.categoryId === id)?._sum.amountUsd ?? new Prisma.Decimal(0);
+    const spentOf = (id: string) => sums.find((s) => s.categoryId === id)?._sum.myAmountUsd ?? new Prisma.Decimal(0);
 
     let tb = new Prisma.Decimal(0);
     let ts = new Prisma.Decimal(0);

@@ -39,7 +39,7 @@ export class StatsService {
     const rangeStart = new Date(Math.min(prevFrom.getTime(), seriesFrom.getTime()));
     const rows = await this.prisma.transaction.findMany({
       where: { userId, date: { gte: rangeStart, lte: to } },
-      select: { type: true, date: true, amountUsd: true, amountVes: true, categoryId: true },
+      select: { type: true, date: true, myAmountUsd: true, myAmountVes: true, categoryId: true },
     });
 
     const cats = await this.prisma.category.findMany({
@@ -66,25 +66,25 @@ export class StatsService {
     for (const r of rows) {
       const kind = r.type === 'INCOME' ? 'income' : 'expense';
       const m = months.get(monthKey(r.date));
-      if (m && r.date >= seriesFrom) add(m[kind], r.amountUsd, r.amountVes);
+      if (m && r.date >= seriesFrom) add(m[kind], r.myAmountUsd, r.myAmountVes);
 
       if (r.date >= from && r.date <= to) {
-        add(cur[kind], r.amountUsd, r.amountVes);
+        add(cur[kind], r.myAmountUsd, r.myAmountVes);
         cur.count++;
         if (kind === 'expense') {
-          add(dailyCur[Math.round((r.date.getTime() - from.getTime()) / DAY)], r.amountUsd, r.amountVes);
+          add(dailyCur[Math.round((r.date.getTime() - from.getTime()) / DAY)], r.myAmountUsd, r.myAmountVes);
           const root = rootOf(r.categoryId);
           const key = root?.id ?? 'none';
           const agg = byCat.get(key) ?? { ...pair(), count: 0 };
-          add(agg, r.amountUsd, r.amountVes);
+          add(agg, r.myAmountUsd, r.myAmountVes);
           agg.count++;
           byCat.set(key, agg);
         }
       }
       if (r.date >= prevFrom && r.date <= prevTo) {
-        add(prev[kind], r.amountUsd, r.amountVes);
+        add(prev[kind], r.myAmountUsd, r.myAmountVes);
         prev.count++;
-        if (kind === 'expense') add(dailyPrev[Math.round((r.date.getTime() - prevFrom.getTime()) / DAY)], r.amountUsd, r.amountVes);
+        if (kind === 'expense') add(dailyPrev[Math.round((r.date.getTime() - prevFrom.getTime()) / DAY)], r.myAmountUsd, r.myAmountVes);
       }
     }
 
@@ -123,18 +123,32 @@ export class StatsService {
     const todayStr = todayLocal();
     const today = parseDateOnly(todayStr);
     const accounts = await this.prisma.account.findMany({ where: { userId }, orderBy: { createdAt: 'asc' } });
-    const [txs, transfers, rates] = await Promise.all([
-      this.prisma.transaction.findMany({ where: { userId, date: { lte: today } }, select: { accountId: true, type: true, date: true, amountUsd: true, amountVes: true } }),
+    const [txs, transfers, rates, debtPayments, pendingInst] = await Promise.all([
+      this.prisma.transaction.findMany({ where: { userId, accountId: { not: null }, date: { lte: today } }, select: { accountId: true, type: true, date: true, amountUsd: true, amountVes: true } }),
       this.prisma.transfer.findMany({ where: { userId, date: { lte: today } }, select: { fromAccountId: true, toAccountId: true, date: true, fromAmount: true, toAmount: true } }),
       this.prisma.exchangeRate.findMany({ where: { source: 'BCV', date: { lte: today } }, orderBy: { date: 'asc' }, select: { date: true, rate: true } }),
+      this.prisma.debtPayment.findMany({
+        where: { accountId: { not: null }, debt: { userId }, date: { lte: today } },
+        select: { accountId: true, date: true, amount: true, accountAmount: true, debt: { select: { direction: true } } },
+      }),
+      // Cuotas que te tocan pagar a ti (compras tuyas, compartidas o no)
+      this.prisma.installment.aggregate({
+        where: { transactionId: null, plan: { userId, OR: [{ sharedId: null }, { shared: { paidByPersonId: null } }] } },
+        _sum: { amountUsd: true },
+      }),
     ]);
 
     const cur = new Map(accounts.map((a) => [a.id, a.currency]));
     // Cada evento es un cambio de saldo en la moneda de su cuenta
     const events: { accountId: string; date: Date; delta: Dec }[] = [];
     for (const t of txs) {
-      const v = cur.get(t.accountId) === 'USD' ? t.amountUsd : t.amountVes;
-      events.push({ accountId: t.accountId, date: t.date, delta: t.type === 'INCOME' ? v : v.neg() });
+      const v = cur.get(t.accountId!) === 'USD' ? t.amountUsd : t.amountVes;
+      events.push({ accountId: t.accountId!, date: t.date, delta: t.type === 'INCOME' ? v : v.neg() });
+    }
+    // Abonos de deudas que entraron o salieron de una cuenta
+    for (const p of debtPayments) {
+      const v = p.accountAmount ?? p.amount;
+      events.push({ accountId: p.accountId!, date: p.date, delta: p.debt.direction === 'OWED_TO_ME' ? v : v.neg() });
     }
     for (const t of transfers) {
       events.push({ accountId: t.fromAccountId, date: t.date, delta: t.fromAmount.neg() });
@@ -216,6 +230,7 @@ export class StatsService {
       accounts: accountRows,
       months: series,
       devaluationTotalUsd: totalDevaluation.toFixed(2),
+      pendingInstallmentsUsd: (pendingInst._sum.amountUsd ?? zero()).toFixed(2),
     };
   }
 }

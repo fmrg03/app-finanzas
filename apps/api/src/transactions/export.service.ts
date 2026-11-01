@@ -17,7 +17,11 @@ export class ExportService {
     const [txs, transfers] = await Promise.all([
       this.prisma.transaction.findMany({
         where,
-        include: { account: true, category: { include: { parent: true } } },
+        include: {
+          account: true, category: { include: { parent: true } },
+          shared: { include: { paidBy: true, participants: { include: { person: true } } } },
+          installmentPlan: { include: { shared: { include: { paidBy: true } } } }, installment: true,
+        },
         orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
         take: 20_000,
       }),
@@ -47,9 +51,12 @@ export class ExportService {
       { header: 'Monto original', key: 'original', width: 15, style: { numFmt: MONEY } },
       { header: 'USD', key: 'usd', width: 13, style: { numFmt: MONEY } },
       { header: 'Bs', key: 'ves', width: 16, style: { numFmt: MONEY } },
+      { header: 'Tu parte USD', key: 'myUsd', width: 13, style: { numFmt: MONEY } },
+      { header: 'Tu parte Bs', key: 'myVes', width: 16, style: { numFmt: MONEY } },
       { header: 'Tasa (Bs/USD)', key: 'rate', width: 13, style: { numFmt: '#,##0.0000' } },
       { header: 'Fuente tasa', key: 'rateSource', width: 11 },
       { header: 'Etiquetas', key: 'tags', width: 20 },
+      { header: 'Detalle', key: 'detail', width: 34 },
     ];
     for (const t of txs) {
       const sign = t.type === 'EXPENSE' ? -1 : 1;
@@ -61,22 +68,26 @@ export class ExportService {
         description: t.description ?? '',
         category: isSub ? t.category!.parent!.name : (t.category?.name ?? 'Sin categoría'),
         subcategory: isSub ? t.category!.name : '',
-        account: t.account.name,
+        account: t.account?.name ?? '(no salió de tus cuentas)',
         currency: t.originalCurrency === 'USD' ? 'USD' : 'Bs',
         original: sign * Number(t.originalAmount),
         usd: sign * Number(t.amountUsd),
         ves: sign * Number(t.amountVes),
+        myUsd: sign * Number(t.myAmountUsd),
+        myVes: sign * Number(t.myAmountVes),
         rate: Number(t.rateUsed),
         rateSource: SOURCE[t.rateSource],
         tags: t.tags.join(', '),
+        detail: detailOf(t),
       });
     }
     styleHeader(ws);
     if (txs.length) {
       const last = txs.length + 1;
-      const total = ws.addRow({ description: 'Total (ingresos − gastos)', usd: { formula: `SUM(I2:I${last})` }, ves: { formula: `SUM(J2:J${last})` } });
+      // El total usa tu parte: en compartidos el resto lo pagaron o lo deben otros
+      const total = ws.addRow({ description: 'Total tuyo (ingresos − gastos)', myUsd: { formula: `SUM(K2:K${last})` }, myVes: { formula: `SUM(L2:L${last})` } });
       total.font = { bold: true };
-      ws.autoFilter = { from: 'A1', to: `M${last}` };
+      ws.autoFilter = { from: 'A1', to: `P${last}` };
     }
 
     const wt = wb.addWorksheet('Transferencias', { views: [{ state: 'frozen', ySplit: 1 }] });
@@ -104,6 +115,27 @@ export class ExportService {
 
     return Buffer.from(await wb.xlsx.writeBuffer());
   }
+}
+
+type ExportTx = {
+  sharePct: Prisma.Decimal | null;
+  shared: { paidBy: { name: string } | null; participants: { person: { name: string } | null; pct: Prisma.Decimal }[] } | null;
+  installmentPlan: { provider: string; count: number; shared: { paidBy: { name: string } | null } | null } | null;
+  installment: { n: number } | null;
+};
+
+function detailOf(t: ExportTx) {
+  const parts: string[] = [];
+  if (t.installmentPlan) {
+    parts.push(`${t.installmentPlan.provider}: ${t.installment ? `cuota ${t.installment.n}/${t.installmentPlan.count}` : 'inicial'}`);
+    if (t.installmentPlan.shared?.paidBy) parts.push(`compró ${t.installmentPlan.shared.paidBy.name}`);
+  }
+  if (t.shared) {
+    parts.push(`Compartido, pagó ${t.shared.paidBy?.name ?? 'yo'}: ` + t.shared.participants.map((p) => `${p.person?.name ?? 'yo'} ${Number(p.pct).toLocaleString('es-VE', { maximumFractionDigits: 2 })} %`).join(', '));
+  } else if (t.sharePct !== null) {
+    parts.push(`Compartido (tu parte ${Number(t.sharePct).toLocaleString('es-VE', { maximumFractionDigits: 2 })} %)`);
+  }
+  return parts.join(' · ');
 }
 
 function styleHeader(ws: ExcelJS.Worksheet) {

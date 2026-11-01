@@ -2,13 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import type { BudgetStatus, Debt, Goal, NetWorth, Recurring, Transfer } from './types';
+import type { BudgetStatus, Debt, Goal, InstallmentPlan, NetWorth, Person, Recurring, Transfer, UpcomingInstallments } from './types';
 
 /** Todo lo que cambia saldos o totales: se refresca junto. */
 function useInvalidateAll() {
   const qc = useQueryClient();
   return () => {
-    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications']) qc.invalidateQueries({ queryKey: [k] });
+    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications', 'debts', 'people', 'installments']) qc.invalidateQueries({ queryKey: [k] });
   };
 }
 
@@ -39,3 +39,7 @@ export const useBudgets = (month?: string) =>
 export const useGoals = () => useQuery({ queryKey: ['goals'], queryFn: () => api<Goal[]>('/goals') });
 export const useDebts = () => useQuery({ queryKey: ['debts'], queryFn: () => api<Debt[]>('/debts') });
 export const useNetWorth = (months = 12) => useQuery({ queryKey: ['net-worth', months], queryFn: () => api<NetWorth>(`/stats/net-worth?months=${months}`) });
+export const usePeople = () => useQuery({ queryKey: ['people'], queryFn: () => api<Person[]>('/people') });
+export const useInstallmentPlans = () => useQuery({ queryKey: ['installments', 'plans'], queryFn: () => api<InstallmentPlan[]>('/installment-plans') });
+export const useUpcomingInstallments = (days = 30) =>
+  useQuery({ queryKey: ['installments', 'upcoming', days], queryFn: () => api<UpcomingInstallments>(`/installment-plans/upcoming?days=${days}`) });

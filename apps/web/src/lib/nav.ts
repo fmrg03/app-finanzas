@@ -16,7 +16,7 @@ export const NAV_GROUPS = [
       { href: '/presupuestos', label: 'Presupuestos', icon: Target },
       { href: '/recurrentes', label: 'Recurrentes', icon: Repeat },
       { href: '/metas', label: 'Metas de ahorro', icon: Goal },
-      { href: '/deudas', label: 'Deudas', icon: HandCoins },
+      { href: '/deudas', label: 'Deudas y cuotas', icon: HandCoins },
     ],
   },
   {
