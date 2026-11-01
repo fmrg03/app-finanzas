@@ -5,3 +5,7 @@ dist
 *.log
 uploads/
 .DS_Store
+*.tsbuildinfo
+next-env.d.ts
+.e2e/
+deploy/.env

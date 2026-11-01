@@ -35,6 +35,17 @@ enum TransactionSource {
   IMPORT
   API
   RECEIPT
+  RECURRING
+}
+
+enum RecurrenceFrequency {
+  WEEKLY
+  MONTHLY
+}
+
+enum DebtDirection {
+  I_OWE
+  OWED_TO_ME
 }
 
 enum ReceiptStatus {
@@ -44,21 +55,25 @@ enum ReceiptStatus {
   FAILED
 }
 
-
 model User {
-  id               String     @id @default(cuid())
-  email            String     @unique
-  passwordHash     String
-  refreshTokenHash String?
-  defaultCurrency  Currency   @default(USD)
+  id                String     @id @default(cuid())
+  email             String     @unique
+  passwordHash      String
+  refreshTokenHash  String?
+  defaultCurrency   Currency   @default(USD)
   defaultRateSource RateSource @default(BCV)
-  createdAt        DateTime   @default(now())
-  updatedAt        DateTime   @updatedAt
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
 
   accounts     Account[]
   categories   Category[]
   transactions Transaction[]
   receipts     Receipt[]
+  transfers    Transfer[]
+  recurrings   Recurring[]
+  budgets      Budget[]
+  goals        SavingsGoal[]
+  debts        Debt[]
 }
 
 model Account {
@@ -71,8 +86,11 @@ model Account {
   createdAt      DateTime    @default(now())
   archivedAt     DateTime?
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+  transfersFrom Transfer[]    @relation("TransferFrom")
+  transfersTo   Transfer[]    @relation("TransferTo")
+  recurrings    Recurring[]
 
   @@unique([userId, name])
 }
@@ -93,6 +111,8 @@ model Category {
   parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
   children     Category[]    @relation("CategoryTree")
   transactions Transaction[]
+  recurrings   Recurring[]
+  budget       Budget?
 
   @@unique([userId, parentId, name])
 }
@@ -112,23 +132,23 @@ model ExchangeRate {
 }
 
 model Transaction {
-  id        String          @id @default(cuid())
-  userId    String
-  accountId String
-  categoryId String?
-  type      TransactionType
-  date      DateTime        @db.Date
+  id          String          @id @default(cuid())
+  userId      String
+  accountId   String
+  categoryId  String?
+  type        TransactionType
+  date        DateTime        @db.Date
   description String?
-  tags      String[]
+  tags        String[]
 
   // Lo que el usuario escribió (en la moneda que eligió)
   originalCurrency Currency
-  originalAmount   Decimal  @db.Decimal(18, 2)
+  originalAmount   Decimal    @db.Decimal(18, 2)
   // Snapshot: ambos valores calculados al momento de la transacción (inmutables)
-  amountUsd        Decimal  @db.Decimal(18, 2)
-  amountVes        Decimal  @db.Decimal(18, 2)
+  amountUsd        Decimal    @db.Decimal(18, 2)
+  amountVes        Decimal    @db.Decimal(18, 2)
   // Tasa exacta aplicada (VES por USD), copiada, no solo referenciada
-  rateUsed         Decimal  @db.Decimal(18, 6)
+  rateUsed         Decimal    @db.Decimal(18, 6)
   rateSource       RateSource
   exchangeRateId   String?
 
@@ -168,4 +188,135 @@ model Receipt {
   transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
 
   @@unique([userId, fileHash])
+}
+
+// Movimiento de dinero entre cuentas propias. No es ingreso ni gasto.
+// Si las monedas difieren es un cambio de divisas: rate = Bs por USD obtenidos en la operación.
+model Transfer {
+  id            String   @id @default(cuid())
+  userId        String
+  date          DateTime @db.Date
+  fromAccountId String
+  toAccountId   String
+  fromAmount    Decimal  @db.Decimal(18, 2)
+  toAmount      Decimal  @db.Decimal(18, 2)
+  rate          Decimal? @db.Decimal(18, 6)
+  // Tasa BCV de ese día, para comparar el cambio obtenido
+  referenceRate Decimal? @db.Decimal(18, 6)
+  description   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user        User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fromAccount Account @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  toAccount   Account @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+
+  @@index([userId, date])
+}
+
+// Plantilla de un movimiento que se repite (sueldo, internet, Netflix)
+model Recurring {
+  id          String              @id @default(cuid())
+  userId      String
+  type        TransactionType
+  accountId   String
+  categoryId  String?
+  currency    Currency
+  amount      Decimal             @db.Decimal(18, 2)
+  rateSource  RateSource?
+  description String
+  tags        String[]
+  frequency   RecurrenceFrequency
+  startDate   DateTime            @db.Date
+  nextDate    DateTime            @db.Date
+  endDate     DateTime?           @db.Date
+  // true: se registra solo; false: queda pendiente para confirmar el monto
+  autoCreate  Boolean             @default(false)
+  active      Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([userId, nextDate])
+}
+
+// Tope mensual de gasto por categoría principal, en dólares
+model Budget {
+  id         String   @id @default(cuid())
+  userId     String
+  categoryId String   @unique
+  amountUsd  Decimal  @db.Decimal(18, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model SavingsGoal {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  targetUsd  Decimal   @db.Decimal(18, 2)
+  targetDate DateTime? @db.Date
+  color      String    @default("#1f6f78")
+  archivedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contributions GoalContribution[]
+
+  @@index([userId])
+}
+
+// Aporte (positivo) o retiro (negativo) de una meta
+model GoalContribution {
+  id        String   @id @default(cuid())
+  goalId    String
+  date      DateTime @db.Date
+  amountUsd Decimal  @db.Decimal(18, 2)
+  note      String?
+  createdAt DateTime @default(now())
+
+  goal SavingsGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([goalId, date])
+}
+
+model Debt {
+  id          String        @id @default(cuid())
+  userId      String
+  direction   DebtDirection
+  person      String
+  description String?
+  currency    Currency
+  amount      Decimal       @db.Decimal(18, 2)
+  dueDate     DateTime?     @db.Date
+  settledAt   DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user     User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments DebtPayment[]
+
+  @@index([userId])
+}
+
+model DebtPayment {
+  id        String   @id @default(cuid())
+  debtId    String
+  date      DateTime @db.Date
+  amount    Decimal  @db.Decimal(18, 2)
+  note      String?
+  createdAt DateTime @default(now())
+
+  debt Debt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+
+  @@index([debtId])
 }

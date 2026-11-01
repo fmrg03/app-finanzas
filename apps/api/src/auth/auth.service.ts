@@ -9,7 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomUUID } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
-import { LoginDto, RegisterDto } from './dto/auth.dto';
+import { ChangePasswordDto, LoginDto, RegisterDto, UpdateMeDto } from './dto/auth.dto';
 
 const sha256 = (v: string) => createHash('sha256').update(v).digest('hex');
 
@@ -57,9 +57,15 @@ export class AuthService {
     return this.issueTokens(user.id, user.email); // rotación: el anterior queda inválido
   }
 
-  async logout(userId: string) {
-    await this.prisma.user.update({ where: { id: userId }, data: { refreshTokenHash: null } });
-    return { ok: true };
+  /** Invalida la sesión a la que pertenece este refresh token (si es válido). */
+  async logoutWithRefresh(refreshToken?: string) {
+    if (!refreshToken) return;
+    try {
+      const { sub } = await this.jwt.verifyAsync<{ sub: string }>(refreshToken, { secret: this.config.getOrThrow('JWT_REFRESH_SECRET') });
+      await this.prisma.user.updateMany({ where: { id: sub, refreshTokenHash: sha256(refreshToken) }, data: { refreshTokenHash: null } });
+    } catch {
+      // Token vencido o inválido: no hay sesión que cerrar
+    }
   }
 
   async me(userId: string) {
@@ -67,6 +73,22 @@ export class AuthService {
       where: { id: userId },
       select: { id: true, email: true, defaultCurrency: true, defaultRateSource: true, createdAt: true },
     });
+  }
+
+  async updateMe(userId: string, dto: UpdateMeDto) {
+    await this.prisma.user.update({ where: { id: userId }, data: { defaultCurrency: dto.defaultCurrency, defaultRateSource: dto.defaultRateSource } });
+    return this.me(userId);
+  }
+
+  /** Cambia la contraseña y emite tokens nuevos: las demás sesiones quedan cerradas. */
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    if (!(await bcrypt.compare(dto.currentPassword, user.passwordHash))) {
+      throw new UnauthorizedException('La contraseña actual no es correcta');
+    }
+    const passwordHash = await bcrypt.hash(dto.newPassword, 12);
+    await this.prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+    return this.issueTokens(user.id, user.email);
   }
 
   private async issueTokens(userId: string, email: string) {

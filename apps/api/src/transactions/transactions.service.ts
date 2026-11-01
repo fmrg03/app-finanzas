@@ -9,6 +9,7 @@ import { CreateTransactionDto, ListTransactionsDto, UpdateTransactionDto } from 
 const INCLUDE = {
   account: { select: { id: true, name: true, currency: true } },
   category: { select: { id: true, name: true, color: true, icon: true, parentId: true } },
+  receipt: { select: { id: true } },
 } satisfies Prisma.TransactionInclude;
 
 export interface CreateOptions {
@@ -217,7 +218,7 @@ export class TransactionsService {
     return cat;
   }
 
-  private async buildWhere(userId: string, q: ListTransactionsDto): Promise<Prisma.TransactionWhereInput> {
+  async buildWhere(userId: string, q: ListTransactionsDto): Promise<Prisma.TransactionWhereInput> {
     const where: Prisma.TransactionWhereInput = { userId };
     if (q.from || q.to) {
       where.date = {
