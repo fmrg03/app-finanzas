@@ -8,7 +8,7 @@ import type { BudgetStatus, Debt, Goal, NetWorth, Recurring, Transfer } from './
 function useInvalidateAll() {
   const qc = useQueryClient();
   return () => {
-    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth']) qc.invalidateQueries({ queryKey: [k] });
+    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications']) qc.invalidateQueries({ queryKey: [k] });
   };
 }
 
@@ -18,7 +18,8 @@ export function useApiMutation<V = unknown, R = unknown>(fn: (v: V) => Promise<R
   const all = useInvalidateAll();
   return useMutation({
     mutationFn: fn,
-    onSuccess: () => (keys ? keys.forEach((k) => qc.invalidateQueries({ queryKey: [k] })) : all()),
+    // Cualquier cambio puede crear o resolver un aviso: la campanita se refresca siempre
+    onSuccess: () => (keys ? [...keys, 'notifications'].forEach((k) => qc.invalidateQueries({ queryKey: [k] })) : all()),
   });
 }
 

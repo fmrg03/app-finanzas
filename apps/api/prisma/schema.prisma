@@ -48,6 +48,17 @@ enum DebtDirection {
   OWED_TO_ME
 }
 
+enum NotificationType {
+  BUDGET_NEAR
+  BUDGET_EXCEEDED
+  RECURRING_DUE
+  DEBT_OVERDUE
+  GOAL_REACHED
+  GOAL_DEADLINE_NEAR
+  GOAL_BEHIND
+  GOAL_MISSED
+}
+
 enum ReceiptStatus {
   PENDING
   EXTRACTED
@@ -65,15 +76,16 @@ model User {
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
-  accounts     Account[]
-  categories   Category[]
-  transactions Transaction[]
-  receipts     Receipt[]
-  transfers    Transfer[]
-  recurrings   Recurring[]
-  budgets      Budget[]
-  goals        SavingsGoal[]
-  debts        Debt[]
+  accounts      Account[]
+  categories    Category[]
+  transactions  Transaction[]
+  receipts      Receipt[]
+  transfers     Transfer[]
+  recurrings    Recurring[]
+  budgets       Budget[]
+  goals         SavingsGoal[]
+  debts         Debt[]
+  notifications Notification[]
 }
 
 model Account {
@@ -264,6 +276,8 @@ model SavingsGoal {
   name       String
   targetUsd  Decimal   @db.Decimal(18, 2)
   targetDate DateTime? @db.Date
+  // Aporte mensual que la persona se propone (opcional); si falta, se usa lo necesario para llegar a la fecha
+  monthlyUsd Decimal?  @db.Decimal(18, 2)
   color      String    @default("#1f6f78")
   archivedAt DateTime?
   createdAt  DateTime  @default(now())
@@ -319,4 +333,22 @@ model DebtPayment {
   debt Debt @relation(fields: [debtId], references: [id], onDelete: Cascade)
 
   @@index([debtId])
+}
+
+// Aviso para el usuario. dedupeKey evita repetir el mismo aviso (ej. un presupuesto excedido una vez por mes).
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  link      String?
+  dedupeKey String
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
 }

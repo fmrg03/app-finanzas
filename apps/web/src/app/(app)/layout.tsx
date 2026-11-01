@@ -4,6 +4,7 @@ import { LogOut } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
+import { NotificationBell, NotificationToasts } from '@/components/notifications';
 import { ensureSession, logout } from '@/lib/api';
 import { cn, rate } from '@/lib/format';
 import { isMoreSection, NAV_GROUPS, NAV_MOBILE } from '@/lib/nav';
@@ -26,6 +27,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <MobileHeader />
       <main className="mx-auto w-full max-w-3xl px-4 pb-28 pt-6 md:px-8 md:pb-12 md:pt-10">{children}</main>
       <BottomNav />
+      <NotificationToasts />
     </div>
   );
 }
@@ -35,7 +37,10 @@ function Sidebar() {
   const router = useRouter();
   return (
     <aside className="sticky top-0 hidden h-dvh flex-col overflow-y-auto border-r border-line bg-surface px-4 py-6 md:flex">
-      <span className="px-2 text-xl font-extrabold tracking-tight">Finanzas</span>
+      <div className="flex items-center justify-between pl-2">
+        <span className="text-xl font-extrabold tracking-tight">Finanzas</span>
+        <NotificationBell />
+      </div>
       <nav className="mt-6 flex flex-col">
         {NAV_GROUPS.map((g, i) => (
           <div key={i} className={cn('flex flex-col gap-0.5', i > 0 && 'mt-5')}>
@@ -106,6 +111,7 @@ function MobileHeader() {
           ))}
         </dl>
       )}
+      <NotificationBell className={cn('-mr-1.5', !shown.length && 'ml-auto')} />
     </header>
   );
 }

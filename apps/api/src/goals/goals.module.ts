@@ -5,6 +5,7 @@ import { IsBoolean, IsDateString, IsHexColor, IsNumberString, IsOptional, IsStri
 import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
 import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { goalPlan } from './goal-plan';
 
 class CreateGoalDto {
   @ApiProperty({ example: 'Fondo de emergencia' }) @IsString() @MinLength(1) @MaxLength(80)
@@ -15,6 +16,10 @@ class CreateGoalDto {
 
   @ApiPropertyOptional({ nullable: true, example: '2026-12-20' }) @IsOptional() @ValidateIf((_, v) => v !== null) @IsDateString({ strict: true })
   targetDate?: string | null;
+
+  @ApiPropertyOptional({ nullable: true, example: '100.00', description: 'Aporte mensual que te propones; vacío = el necesario para llegar a la fecha' })
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsNumberString()
+  monthlyUsd?: string | null;
 
   @ApiPropertyOptional() @IsOptional() @IsHexColor()
   color?: string;
@@ -48,27 +53,30 @@ class GoalsService {
     });
     const today = parseDateOnly(todayLocal());
     return goals.map((g) => {
-      const saved = g.contributions.reduce((a, c) => a.add(c.amountUsd), new D(0));
-      const remaining = D.max(g.targetUsd.sub(saved), 0);
-      // Meses que faltan (fracción incluida) para saber cuánto apartar por mes
-      const monthsLeft = g.targetDate ? Math.max((g.targetDate.getTime() - today.getTime()) / (30.44 * 86_400_000), 0) : null;
-      const monthlyNeeded = monthsLeft !== null && remaining.gt(0) ? (monthsLeft < 1 ? remaining : remaining.div(monthsLeft)) : null;
+      const p = goalPlan(g, today);
       return {
         ...g,
         targetDate: g.targetDate ? toDateOnly(g.targetDate) : null,
         contributions: g.contributions.map((c) => ({ ...c, date: toDateOnly(c.date) })),
-        savedUsd: saved.toFixed(2),
-        remainingUsd: remaining.toFixed(2),
-        pct: Math.min(Math.round(saved.div(g.targetUsd).mul(100).toNumber()), 100),
-        monthlyNeededUsd: monthlyNeeded ? monthlyNeeded.toFixed(2) : null,
-        overdue: !!g.targetDate && g.targetDate < today && remaining.gt(0),
+        savedUsd: p.saved.toFixed(2),
+        remainingUsd: p.remaining.toFixed(2),
+        pct: Math.min(Math.round(p.saved.div(g.targetUsd).mul(100).toNumber()), 100),
+        monthlyNeededUsd: p.monthlyNeeded ? p.monthlyNeeded.toFixed(2) : null,
+        // Aporte mensual a cumplir (el propuesto o el necesario) y lo aportado en el mes en curso
+        planUsd: p.plan && p.remaining.gt(0) && (p.daysLeft === null || p.daysLeft >= 0) ? p.plan.toFixed(2) : null,
+        thisMonthUsd: p.thisMonth.toFixed(2),
+        daysLeft: p.daysLeft,
+        overdue: !!g.targetDate && g.targetDate < today && p.remaining.gt(0),
       };
     });
   }
 
   async create(userId: string, dto: CreateGoalDto) {
     return this.prisma.savingsGoal.create({
-      data: { userId, name: dto.name.trim(), targetUsd: positive(dto.targetUsd), targetDate: dto.targetDate ? parseDateOnly(dto.targetDate) : null, color: dto.color },
+      data: {
+        userId, name: dto.name.trim(), targetUsd: positive(dto.targetUsd), targetDate: dto.targetDate ? parseDateOnly(dto.targetDate) : null,
+        monthlyUsd: dto.monthlyUsd ? positive(dto.monthlyUsd) : null, color: dto.color,
+      },
     });
   }
 
@@ -80,6 +88,7 @@ class GoalsService {
         name: dto.name?.trim(),
         targetUsd: dto.targetUsd ? positive(dto.targetUsd) : undefined,
         targetDate: dto.targetDate === undefined ? undefined : dto.targetDate ? parseDateOnly(dto.targetDate) : null,
+        monthlyUsd: dto.monthlyUsd === undefined ? undefined : dto.monthlyUsd ? positive(dto.monthlyUsd) : null,
         color: dto.color,
         ...(dto.archived === undefined ? {} : { archivedAt: dto.archived ? new Date() : null }),
       },

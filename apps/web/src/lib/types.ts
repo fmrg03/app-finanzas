@@ -167,6 +167,12 @@ export interface Goal {
   remainingUsd: string;
   pct: number;
   monthlyNeededUsd: string | null;
+  /** Aporte mensual propuesto por el usuario (opcional). */
+  monthlyUsd: string | null;
+  /** Lo que toca aportar este mes: el propuesto o, si no hay, el necesario. */
+  planUsd: string | null;
+  thisMonthUsd: string;
+  daysLeft: number | null;
   overdue: boolean;
 }
 

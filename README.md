@@ -51,8 +51,9 @@ Aparece el botón **Leer factura** al crear un movimiento. Usa `claude-haiku-5-5
 | Patrimonio | Total en USD mes a mes y cuánto valor perdieron los bolívares que tenías guardados |
 | Presupuestos | Tope mensual en USD por categoría, con alerta al 80 % y proyección a fin de mes |
 | Recurrentes | Sueldo, servicios y suscripciones: automáticos o con confirmación del monto de cada mes |
-| Metas | Objetivo en USD, aportes y retiros, y cuánto apartar por mes para llegar a tiempo |
+| Metas | Objetivo en USD, aportes y retiros, aporte mensual propuesto (o el necesario para llegar a tiempo) y cuánto llevas este mes |
 | Deudas | Lo que debes y lo que te deben, con abonos y vencimientos |
+| Notificaciones | Campanita con avisos: cuando te queda el 5 % de un presupuesto y cuando te pasas, recurrentes por confirmar, deudas vencidas, y en metas: fecha cerca (30 y 7 días), aporte del mes atrasado, mes sin cumplir, fecha vencida sin llegar y meta cumplida. Aviso emergente en el momento en que ocurre |
 | Tasas | BCV y paralelo del día, historial por mes, carga o corrección manual |
 | Ajustes | Moneda y tasa predeterminadas, categorías, cambio de contraseña |
 
@@ -73,6 +74,7 @@ Todos bajo `/api` con `Authorization: Bearer <accessToken>`. Login y refresh dej
 | Deudas | `GET/POST /debts`, `PATCH/DELETE /debts/:id`, `POST /debts/:id/payments`, `DELETE /debts/:id/payments/:pid` |
 | Resumen | `GET /stats/overview?from&to&months`, `GET /stats/net-worth?months` |
 | Excel | `GET /transactions/export` (mismos filtros que el listado) |
+| Notificaciones | `GET /notifications`, `POST /notifications/read-all`, `POST /notifications/:id/read`, `DELETE /notifications/:id` |
 | Facturas | `GET /receipts/status`, `POST /receipts` (multipart `file`), `POST /receipts/:id/confirm`, `GET /receipts/:id/file` |
 
 ## Decisiones
@@ -87,6 +89,8 @@ Todos bajo `/api` con `Authorization: Bearer <accessToken>`. Login y refresh dej
 - Una cuenta con movimientos o transferencias no se borra: se archiva.
 - Las transferencias no son ingreso ni gasto: mueven saldo entre cuentas y no aparecen en los totales del mes.
 - Recurrentes: cada ocurrencia se registra con `externalId = rec:<id>:<fecha>`, así nunca se duplica aunque el proceso corra dos veces. Si la API estuvo apagada, al arrancar registra lo atrasado (hasta 24 ocurrencias).
+- Notificaciones: la API revisa las condiciones cada vez que se consultan (la web lo hace al abrir, cada minuto y después de cada cambio) y guarda cada aviso con una clave única, así nunca se repite. Un presupuesto avisa una vez por mes al quedar el 5 % (`BUDGET_NEAR_REMAINING_PCT`) y otra al pasarse; si cambias el tope, vuelve a avisar sobre el nuevo monto.
+- Alertas de metas: el plan de cada mes es el aporte mensual que pusiste o, si no pusiste, lo necesario para llegar a la fecha. Desde el día 20 (`GOAL_REMINDER_DAY`) avisa si vas atrasado en el mes, y al empezar el mes siguiente avisa si no se cumplió (solo si la meta existía el mes completo). La fecha avisa a 30 y 7 días (`GOAL_DEADLINE_DAYS`) y, si pasa sin llegar, una última vez sugiriendo mover la fecha o ajustar el objetivo. Una meta cumplida no recibe más alertas.
 - Presupuestos y metas van en USD: en Bs se desactualizarían solos con la devaluación.
 - Patrimonio y devaluación: los saldos en Bs se convierten con la BCV de cada fecha. La pérdida por devaluación de un mes es lo que valían en USD los Bs del inicio del mes menos lo que valen al cierre (aproximación que ignora los movimientos dentro del mes).
 

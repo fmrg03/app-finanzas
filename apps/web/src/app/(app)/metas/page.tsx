@@ -87,6 +87,7 @@ function GoalCard({ g, onEdit }: { g: Goal; onEdit: () => void }) {
               : `Faltan ${money(g.remainingUsd, 'USD')} para el ${dmy(g.targetDate)}: unos ${money(g.monthlyNeededUsd ?? 0, 'USD')} al mes.`
             : `Faltan ${money(g.remainingUsd, 'USD')}.`}
       </p>
+      {!done && !g.archivedAt && g.planUsd && <MonthPlan g={g} />}
       {!g.archivedAt && (
         <div className="mt-4 flex items-center gap-2">
           <label className="sr-only" htmlFor={`g-${g.id}`}>Monto en USD</label>
@@ -119,6 +120,24 @@ function GoalCard({ g, onEdit }: { g: Goal; onEdit: () => void }) {
   );
 }
 
+function MonthPlan({ g }: { g: Goal }) {
+  const plan = Number(g.planUsd);
+  const got = Number(g.thisMonthUsd);
+  const ok = got >= plan;
+  const pct = plan > 0 ? Math.min(100, Math.max(0, Math.round((got / plan) * 100))) : 0;
+  return (
+    <div className="mt-3 rounded-xl bg-canvas px-3 py-2">
+      <div className="flex items-baseline justify-between gap-2 text-sm">
+        <span className="text-muted">{g.monthlyUsd ? 'Aporte de este mes' : 'Sugerido este mes'}</span>
+        <span className={cn('font-semibold tabular-nums', ok && 'text-income')}>
+          {money(Math.max(got, 0), 'USD')} de {money(plan, 'USD')}
+        </span>
+      </div>
+      <Progress className="mt-1.5" pct={pct} tone={ok ? 'income' : 'accent'} label={`Aporte del mes: ${pct} %`} />
+    </div>
+  );
+}
+
 function GoalForm({ goal, onDone }: { goal?: Goal; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const save = useApiMutation((b: object) => (goal ? api(`/goals/${goal.id}`, { method: 'PATCH', json: b }) : api('/goals', { method: 'POST', json: b })), ['goals']);
@@ -129,7 +148,7 @@ function GoalForm({ goal, onDone }: { goal?: Goal; onDone: () => void }) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     try {
-      await save.mutateAsync({ name: String(fd.get('name')), targetUsd: toApi(String(fd.get('targetUsd'))), targetDate: String(fd.get('targetDate')) || null, color: String(fd.get('color')) });
+      await save.mutateAsync({ name: String(fd.get('name')), targetUsd: toApi(String(fd.get('targetUsd'))), targetDate: String(fd.get('targetDate')) || null, monthlyUsd: toApi(String(fd.get('monthlyUsd'))) || null, color: String(fd.get('color')) });
       onDone();
     } catch (err) {
       setError((err as Error).message);
@@ -145,6 +164,9 @@ function GoalForm({ goal, onDone }: { goal?: Goal; onDone: () => void }) {
         <Field label="Objetivo (USD)"><Input name="targetUsd" inputMode="decimal" defaultValue={goal ? String(Number(goal.targetUsd)).replace('.', ',') : ''} required /></Field>
         <Field label="Para cuándo (opcional)"><Input type="date" name="targetDate" defaultValue={goal?.targetDate ?? ''} /></Field>
       </div>
+      <Field label="Aporte mensual (opcional)" hint="Cuánto piensas apartar cada mes. Si lo dejas vacío y pones fecha, se calcula lo necesario. Te avisamos si un mes no lo cumples.">
+        <Input name="monthlyUsd" inputMode="decimal" placeholder="USD" defaultValue={goal?.monthlyUsd ? String(Number(goal.monthlyUsd)).replace('.', ',') : ''} />
+      </Field>
       {error && <ErrorNote>{error}</ErrorNote>}
       <div className="flex flex-wrap items-center gap-2">
         {goal && (

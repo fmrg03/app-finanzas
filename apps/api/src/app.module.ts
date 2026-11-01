@@ -17,6 +17,7 @@ import { RecurringModule } from './recurring/recurring.module';
 import { BudgetsModule } from './budgets/budgets.module';
 import { GoalsModule } from './goals/goals.module';
 import { DebtsModule } from './debts/debts.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Controller('health')
 class HealthController {
@@ -46,6 +47,7 @@ class HealthController {
     BudgetsModule,
     GoalsModule,
     DebtsModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

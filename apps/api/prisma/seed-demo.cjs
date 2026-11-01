@@ -194,8 +194,8 @@ async function crear() {
   }
 
   // Metas con aportes de los meses anteriores
-  const fondo = await prisma.savingsGoal.create({ data: { userId, name: 'Fondo de emergencia', targetUsd: '1500', targetDate: monthDay(28, 8), color: '#1f6f78' } });
-  const viaje = await prisma.savingsGoal.create({ data: { userId, name: 'Viaje a Mérida', targetUsd: '450', targetDate: monthDay(15, 2), color: '#a855f7' } });
+  const fondo = await prisma.savingsGoal.create({ data: { userId, name: 'Fondo de emergencia', targetUsd: '1500', targetDate: monthDay(28, 8), monthlyUsd: '120', color: '#1f6f78', createdAt: desde } });
+  const viaje = await prisma.savingsGoal.create({ data: { userId, name: 'Viaje a Mérida', targetUsd: '450', targetDate: monthDay(15, 2), color: '#a855f7', createdAt: desde } });
   for (let m = 0; m < MONTHS; m++) {
     const d = new Date(Date.UTC(desde.getUTCFullYear(), desde.getUTCMonth() + m, 3));
     if (d <= today) await prisma.goalContribution.create({ data: { goalId: fondo.id, date: d, amountUsd: m === 3 ? '-40' : '110', note: m === 3 ? 'Reparación del carro' : null } });
