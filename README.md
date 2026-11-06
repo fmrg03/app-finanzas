@@ -100,6 +100,9 @@ Todos bajo `/api` con `Authorization: Bearer <accessToken>`. Login y refresh dej
 - Presupuestos y metas van en USD: en Bs se desactualizarían solos con la devaluación.
 - Patrimonio y devaluación: los saldos en Bs se convierten con la BCV de cada fecha. La pérdida por devaluación de un mes es lo que valían en USD los Bs del inicio del mes menos lo que valen al cierre (aproximación que ignora los movimientos dentro del mes).
 
+## Usarla en tu propia PC
+Para usar la app con tus datos reales en tu PC con Windows, separada del entorno de desarrollo (puerto 47830) y con acceso desde el teléfono por Tailscale, sigue [`deploy/casa/README.md`](deploy/casa/README.md).
+
 ## Despliegue en un servidor con dominio
 Todo corre con Docker Compose: Postgres, API, web y Caddy, que obtiene el certificado HTTPS solo. La web y la API quedan en el mismo dominio (`/api/*` va a la API).
 

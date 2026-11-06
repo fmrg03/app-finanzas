@@ -1,0 +1,28 @@
+# Solo HTTP dentro de tu PC: el HTTPS lo pone Tailscale (tailscale serve)
+{
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	# Fotos de facturas de hasta 10 MB
+	request_body {
+		max_size 12MB
+	}
+
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options DENY
+		-Server
+	}
+}
