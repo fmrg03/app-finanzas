@@ -28,6 +28,7 @@ export class AccountsService {
         select: { accountId: true, amount: true, accountAmount: true, debt: { select: { direction: true } } },
       }),
     ]);
+    const reserved = await this.reservedByAccount(userId);
     return accounts.map((acc) => {
       let balance = new Prisma.Decimal(acc.initialBalance);
       for (const s of sums.filter((x) => x.accountId === acc.id)) {
@@ -40,8 +41,43 @@ export class AccountsService {
         const v = p.accountAmount ?? p.amount;
         balance = p.debt.direction === 'OWED_TO_ME' ? balance.add(v) : balance.sub(v);
       }
-      return { ...acc, balance: balance.toFixed(2) };
+      const res = reserved.filter((x) => x.accountId === acc.id).map((x) => ({ ...x, amount: x.inCurrency(acc.currency) }));
+      return {
+        ...acc,
+        balance: balance.toFixed(2),
+        // Apartado para pagos de varios meses: sigue en la cuenta, pero ya tiene destino
+        reserved: res.reduce((a, x) => a.add(x.amount), new Prisma.Decimal(0)).toFixed(2),
+        reservedFor: res.map((x) => ({ recurringId: x.recurringId, description: x.description, amount: x.amount.toFixed(2) })),
+      };
     });
+  }
+
+  /** Lo apartado en cada recurrente activo con saldo, convertible a la moneda de su cuenta con la última tasa. */
+  private async reservedByAccount(userId: string) {
+    const recs = await this.prisma.recurring.findMany({
+      where: { userId, active: true, reserve: true },
+      select: { id: true, accountId: true, description: true, currency: true, rateSource: true, reserves: { select: { amount: true } } },
+    });
+    const withBalance = recs
+      .map((r) => ({ ...r, balance: r.reserves.reduce((a, x) => a.add(x.amount), new Prisma.Decimal(0)) }))
+      .filter((r) => r.balance.gt(0));
+    if (!withBalance.length) return [];
+    const rates = new Map<string, Prisma.Decimal>();
+    for (const src of new Set(withBalance.map((r) => r.rateSource ?? 'BCV'))) {
+      const row = await this.prisma.exchangeRate.findFirst({ where: { source: src }, orderBy: { date: 'desc' } });
+      if (row) rates.set(src, row.rate);
+    }
+    return withBalance.map((r) => ({
+      recurringId: r.id,
+      accountId: r.accountId,
+      description: r.description,
+      inCurrency: (cur: string) => {
+        if (cur === r.currency) return r.balance;
+        const rate = rates.get(r.rateSource ?? 'BCV');
+        if (!rate) return new Prisma.Decimal(0);
+        return (cur === 'VES' ? r.balance.mul(rate) : r.balance.div(rate)).toDecimalPlaces(2);
+      },
+    }));
   }
 
   async findOne(userId: string, id: string) {

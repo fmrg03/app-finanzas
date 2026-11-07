@@ -46,18 +46,23 @@ export class PeopleService {
       orderBy: { name: 'asc' },
       include: {
         debts: { where: { settledAt: null }, include: { payments: { select: { amount: true } } } },
-        linkedUser: { select: { id: true, name: true, email: true, disabledAt: true } },
+        linkedUser: { select: { id: true, name: true, email: true, disabledAt: true, phone: true } },
       },
     });
-    return people.map(({ debts, ...p }) => {
+    return people.map(({ debts, linkedUser, ...p }) => {
       const sums = { owedToMeUsd: new D(0), owedToMeVes: new D(0), iOweUsd: new D(0), iOweVes: new D(0) };
       for (const d of debts) {
         const rem = D.max(d.amount.sub(d.payments.reduce((a, x) => a.add(x.amount), new D(0))), 0);
         const key = `${d.direction === 'OWED_TO_ME' ? 'owedToMe' : 'iOwe'}${d.currency === 'USD' ? 'Usd' : 'Ves'}` as keyof typeof sums;
         sums[key] = sums[key].add(rem);
       }
+      const { phone: linkedPhone, ...lu } = linkedUser ?? { phone: null };
       return {
         ...p,
+        // Si no le pusiste WhatsApp, se usa el que tu familiar puso en su cuenta
+        phone: p.phone ?? linkedPhone ?? null,
+        phoneFromAccount: !p.phone && !!linkedPhone,
+        linkedUser: linkedUser ? lu : null,
         openDebts: debts.length,
         owedToMeUsd: sums.owedToMeUsd.toFixed(2), owedToMeVes: sums.owedToMeVes.toFixed(2),
         iOweUsd: sums.iOweUsd.toFixed(2), iOweVes: sums.iOweVes.toFixed(2),
@@ -111,14 +116,19 @@ export class PeopleService {
    * La persona que representa a `target` dentro de la cuenta de `ownerId`, vinculada a su usuario.
    * Reutiliza una persona con el mismo nombre si todavía no estaba vinculada a nadie.
    */
-  async ensureLinkedPerson(ownerId: string, target: { id: string; name: string | null; email: string }, db: Prisma.TransactionClient = this.prisma) {
+  async ensureLinkedPerson(
+    ownerId: string,
+    target: { id: string; name: string | null; email: string; phone?: string | null },
+    db: Prisma.TransactionClient = this.prisma,
+  ) {
+    const phone = target.phone ?? null;
     const linked = await db.person.findUnique({ where: { userId_linkedUserId: { userId: ownerId, linkedUserId: target.id } } });
-    if (linked) return linked;
+    if (linked) return !linked.phone && phone ? db.person.update({ where: { id: linked.id }, data: { phone } }) : linked;
     const name = displayName(target);
     const same = await db.person.findFirst({ where: { userId: ownerId, name: { equals: name, mode: 'insensitive' } } });
-    if (same && !same.linkedUserId) return db.person.update({ where: { id: same.id }, data: { linkedUserId: target.id } });
+    if (same && !same.linkedUserId) return db.person.update({ where: { id: same.id }, data: { linkedUserId: target.id, phone: same.phone ?? phone } });
     const finalName = same ? `${name} (${target.email.split('@')[0]})` : name;
-    return db.person.create({ data: { userId: ownerId, name: finalName, linkedUserId: target.id } });
+    return db.person.create({ data: { userId: ownerId, name: finalName, linkedUserId: target.id, phone } });
   }
 
   private async assertLinkable(userId: string, linkedUserId: string, personId?: string) {

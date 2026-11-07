@@ -490,7 +490,7 @@ function PeopleTab() {
                     {p.name}
                     {p.linkedUser && <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent"><Link2 size={12} /> usa la app</span>}
                   </p>
-                  <p className="text-xs text-muted">{p.phone ? `+${p.phone}` : 'Sin WhatsApp'}</p>
+                  <p className="text-xs text-muted">{p.phone ? `+${p.phone}` : p.linkedUser ? 'Sin WhatsApp: puede ponerlo en Ajustes de su cuenta' : 'Sin WhatsApp'}</p>
                 </div>
                 <div className="text-right text-sm tabular-nums">
                   {owes && <p className="text-income">te debe {[Number(p.owedToMeUsd) > 0 && money(p.owedToMeUsd, 'USD'), Number(p.owedToMeVes) > 0 && money(p.owedToMeVes, 'VES')].filter(Boolean).join(' + ')}</p>}
@@ -529,6 +529,7 @@ function PersonForm({ person, onDone }: { person?: Person; onDone: () => void })
     try {
       await save.mutateAsync({
         name: String(fd.get('name')).trim(),
+        // Vacío en un familiar con WhatsApp en su cuenta: se sigue usando el de su cuenta
         phone: String(fd.get('phone')).trim() || null,
         ...(others.length ? { linkedUserId: String(fd.get('linkedUserId')) || null } : {}),
       });
@@ -540,8 +541,11 @@ function PersonForm({ person, onDone }: { person?: Person; onDone: () => void })
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-4">
       <Field label="Nombre"><Input name="name" defaultValue={person?.name} required maxLength={80} autoFocus /></Field>
-      <Field label="WhatsApp (opcional)" hint="Con código de país, o un número venezolano como 0412 123 4567">
-        <Input name="phone" inputMode="tel" defaultValue={person?.phone ? `+${person.phone}` : ''} placeholder="+58 412 123 4567" />
+      <Field
+        label="WhatsApp (opcional)"
+        hint={person?.phoneFromAccount ? `Por ahora se usa el que puso en su cuenta (+${person.phone}). Escribe otro solo si quieres cambiarlo.` : 'Con código de país, o un número venezolano como 0412 123 4567'}
+      >
+        <Input name="phone" inputMode="tel" defaultValue={person?.phone && !person.phoneFromAccount ? `+${person.phone}` : ''} placeholder={person?.phoneFromAccount ? `+${person.phone}` : '+58 412 123 4567'} />
       </Field>
       {!!others.length && (
         <Field label="¿Usa la app?" hint="Si es un familiar con cuenta, lo que pagues y compartas con esta persona le aparecerá en su cuenta">

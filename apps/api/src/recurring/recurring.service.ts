@@ -6,24 +6,22 @@ import { CronJob } from 'cron';
 import { APP_TIMEZONE, parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { TransactionsService } from '../transactions/transactions.service';
-import { ConfirmRecurringDto, CreateRecurringDto, UpdateRecurringDto } from './recurring.dto';
+import { ConfirmRecurringDto, ConfirmReserveDto, CreateRecurringDto, UpdateRecurringDto } from './recurring.dto';
+import {
+  canReserve, dayOfMonth, firstReserveDate, nextOccurrence, nextReserveDate, reserveAfterPayment, reserveStatus, sumAmounts as sum,
+} from './schedule';
+
+export { nextOccurrence } from './schedule';
 
 const INCLUDE = {
   account: { select: { id: true, name: true, currency: true } },
   category: { select: { id: true, name: true, color: true } },
+  reserves: { select: { amount: true } },
 } satisfies Prisma.RecurringInclude;
 
-const MAX_CATCH_UP = 24;
+const RESERVE_ONLY = 'El apartado mensual es para pagos trimestrales, semestrales o anuales';
 
-/** Siguiente fecha: +7 días, o el mismo día del mes de startDate (ajustado a meses cortos: 31 → 30 o 28). */
-export function nextOccurrence(r: Pick<Recurring, 'frequency' | 'startDate'>, from: Date): Date {
-  if (r.frequency === 'WEEKLY') return new Date(from.getTime() + 7 * 86_400_000);
-  const day = r.startDate.getUTCDate();
-  const y = from.getUTCFullYear();
-  const m = from.getUTCMonth() + 1;
-  const last = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  return new Date(Date.UTC(y, m, Math.min(day, last)));
-}
+const MAX_CATCH_UP = 24;
 
 @Injectable()
 export class RecurringService implements OnApplicationBootstrap {
@@ -61,15 +59,29 @@ export class RecurringService implements OnApplicationBootstrap {
     return items.map(present);
   }
 
+  /** Apartados que ya toca confirmar. */
+  async reservesDue(userId: string) {
+    const today = parseDateOnly(todayLocal());
+    const items = await this.prisma.recurring.findMany({
+      where: { userId, active: true, reserve: true, reserveNextDate: { lte: today } },
+      include: INCLUDE,
+      orderBy: { reserveNextDate: 'asc' },
+    });
+    return items.map(present);
+  }
+
   async create(userId: string, dto: CreateRecurringDto) {
     await this.validate(userId, dto);
     const start = parseDateOnly(dto.startDate);
+    if (dto.reserve && !canReserve(dto.frequency)) throw new BadRequestException(RESERVE_ONLY);
+    const reserveDay = dto.reserve ? (dto.reserveDay ?? 1) : null;
     const r = await this.prisma.recurring.create({
       data: {
         userId, type: dto.type, accountId: dto.accountId, categoryId: dto.categoryId ?? null, currency: dto.currency,
         amount: amount(dto.amount), rateSource: dto.rateSource ?? null, description: dto.description.trim(),
         tags: normTags(dto.tags), frequency: dto.frequency, startDate: start, nextDate: start,
         endDate: dto.endDate ? parseDateOnly(dto.endDate) : null, autoCreate: dto.autoCreate ?? false, active: dto.active ?? true,
+        reserve: !!dto.reserve, reserveDay, reserveNextDate: reserveDay ? firstReserveDate(parseDateOnly(todayLocal()), reserveDay) : null,
       },
       include: INCLUDE,
     });
@@ -84,8 +96,11 @@ export class RecurringService implements OnApplicationBootstrap {
   }
 
   async update(userId: string, id: string, dto: UpdateRecurringDto) {
-    const cur = await this.prisma.recurring.findFirst({ where: { id, userId } });
+    const cur = await this.prisma.recurring.findFirst({ where: { id, userId }, include: { reserves: { select: { amount: true } } } });
     if (!cur) throw new NotFoundException('Recurrente no encontrado');
+    const reserve = dto.reserve ?? cur.reserve;
+    if (reserve && !canReserve(dto.frequency ?? cur.frequency)) throw new BadRequestException(RESERVE_ONLY);
+    const reserveData = this.reserveChange(cur, reserve, dto.reserveDay);
     await this.validate(userId, { type: dto.type ?? cur.type, accountId: dto.accountId ?? cur.accountId, categoryId: dto.categoryId === undefined ? cur.categoryId : dto.categoryId });
     // Cambiar la fecha de inicio reprograma la próxima
     const start = dto.startDate ? parseDateOnly(dto.startDate) : undefined;
@@ -98,8 +113,14 @@ export class RecurringService implements OnApplicationBootstrap {
         ...(start ? { startDate: start, nextDate: start } : {}),
         endDate: dto.endDate === undefined ? undefined : dto.endDate ? parseDateOnly(dto.endDate) : null,
         autoCreate: dto.autoCreate, active: dto.active,
+        ...reserveData,
       },
     });
+    // Al quitar el apartado, lo reservado queda libre en la cuenta
+    const balance = sum(cur.reserves);
+    if (cur.reserve && !reserve && !balance.isZero()) {
+      await this.prisma.recurringReserve.create({ data: { recurringId: id, kind: 'USED', date: parseDateOnly(todayLocal()), amount: balance.neg() } });
+    }
     if (r.autoCreate && r.active) await this.processOne(r);
     return this.findOne(userId, id);
   }
@@ -124,8 +145,34 @@ export class RecurringService implements OnApplicationBootstrap {
       },
       { source: 'RECURRING', externalId: `rec:${r.id}:${due}` },
     );
+    await this.useReserve(r, dto.date ?? due);
     await this.advance(r);
     return tx;
+  }
+
+  /** Confirma el apartado del mes (por defecto, lo sugerido para llegar completo al pago) y pasa al siguiente. */
+  async confirmReserve(userId: string, id: string, dto: ConfirmReserveDto) {
+    const r = await this.prisma.recurring.findFirst({ where: { id, userId }, include: INCLUDE });
+    if (!r) throw new NotFoundException('Recurrente no encontrado');
+    if (!r.reserve || !r.reserveDay || !r.reserveNextDate) throw new BadRequestException('Este recurrente no tiene apartado mensual');
+    const amt = dto.amount !== undefined ? amount(dto.amount) : present(r).reserveStatus!.suggested;
+    if (new Prisma.Decimal(amt).lte(0)) throw new BadRequestException('Ya tienes apartado todo el pago; no hace falta apartar más');
+    await this.prisma.$transaction([
+      this.prisma.recurringReserve.create({
+        data: { recurringId: id, kind: 'SET_ASIDE', date: dto.date ? parseDateOnly(dto.date) : r.reserveNextDate, amount: amt },
+      }),
+      this.prisma.recurring.update({ where: { id }, data: { reserveNextDate: nextReserveDate(r.reserveNextDate, r.reserveDay) } }),
+    ]);
+    return this.findOne(userId, id);
+  }
+
+  /** Salta el apartado de este mes; lo que falte se reparte entre los meses que quedan. */
+  async skipReserve(userId: string, id: string) {
+    const r = await this.prisma.recurring.findFirst({ where: { id, userId } });
+    if (!r) throw new NotFoundException('Recurrente no encontrado');
+    if (!r.reserve || !r.reserveDay || !r.reserveNextDate) throw new BadRequestException('Este recurrente no tiene apartado mensual');
+    await this.prisma.recurring.update({ where: { id }, data: { reserveNextDate: nextReserveDate(r.reserveNextDate, r.reserveDay) } });
+    return this.findOne(userId, id);
   }
 
   /** Salta la ocurrencia pendiente sin registrar nada (por ejemplo, ese mes no se pagó). */
@@ -170,6 +217,7 @@ export class RecurringService implements OnApplicationBootstrap {
           { source: 'RECURRING', externalId: `rec:${cur.id}:${date}` },
         );
         created++;
+        await this.useReserve(cur, date);
       } catch (e) {
         // P2002 = ya existía (se registró antes); cualquier otro error se reporta y se deja para el próximo intento
         if (!(e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002')) {
@@ -186,6 +234,33 @@ export class RecurringService implements OnApplicationBootstrap {
     const next = nextOccurrence(r, r.nextDate);
     const ended = r.endDate && next > r.endDate;
     return this.prisma.recurring.update({ where: { id: r.id }, data: { nextDate: next, ...(ended ? { active: false } : {}) } });
+  }
+
+  /** Al pagar, lo apartado se usa (el saldo vuelve a cero) y el próximo apartado queda después del pago. */
+  private async useReserve(r: Recurring, paidOn: string) {
+    if (!r.reserve || !r.reserveDay) return;
+    const rows = await this.prisma.recurringReserve.findMany({ where: { recurringId: r.id }, select: { amount: true } });
+    const balance = sum(rows);
+    const fresh = await this.prisma.recurring.findUniqueOrThrow({ where: { id: r.id } });
+    await this.prisma.$transaction([
+      ...(balance.gt(0)
+        ? [this.prisma.recurringReserve.create({ data: { recurringId: r.id, kind: 'USED', date: parseDateOnly(paidOn), amount: balance.neg() } })]
+        : []),
+      this.prisma.recurring.update({ where: { id: r.id }, data: { reserveNextDate: reserveAfterPayment(fresh.reserveNextDate, r.reserveDay, r.nextDate) } }),
+    ]);
+  }
+
+  /** Campos del apartado al editar: al activarlo empieza este mes; al cambiar el día se mantiene el mes pendiente. */
+  private reserveChange(cur: Recurring, reserve: boolean, day?: number) {
+    if (!reserve) return cur.reserve ? { reserve: false, reserveDay: null, reserveNextDate: null } : {};
+    if (!cur.reserve || !cur.reserveNextDate) {
+      const d = day ?? cur.reserveDay ?? 1;
+      return { reserve: true, reserveDay: d, reserveNextDate: firstReserveDate(parseDateOnly(todayLocal()), d) };
+    }
+    if (day && day !== cur.reserveDay) {
+      return { reserveDay: day, reserveNextDate: dayOfMonth(cur.reserveNextDate.getUTCFullYear(), cur.reserveNextDate.getUTCMonth(), day) };
+    }
+    return {};
   }
 
   private async validate(userId: string, d: { type: string; accountId: string; categoryId?: string | null }) {
@@ -206,6 +281,12 @@ function amount(v: string) {
 }
 const normTags = (t?: string[]) => [...new Set((t ?? []).map((x) => x.trim().toLowerCase()).filter(Boolean))];
 
-function present<T extends { startDate: Date; nextDate: Date; endDate: Date | null }>(r: T) {
-  return { ...r, startDate: toDateOnly(r.startDate), nextDate: toDateOnly(r.nextDate), endDate: r.endDate ? toDateOnly(r.endDate) : null };
+function present<T extends Parameters<typeof reserveStatus>[0] & { startDate: Date; endDate: Date | null }>(r: T) {
+  const { reserves: _r, ...rest } = r;
+  return {
+    ...rest,
+    startDate: toDateOnly(r.startDate), nextDate: toDateOnly(r.nextDate), endDate: r.endDate ? toDateOnly(r.endDate) : null,
+    reserveNextDate: r.reserveNextDate ? toDateOnly(r.reserveNextDate) : null,
+    reserveStatus: reserveStatus(r),
+  };
 }

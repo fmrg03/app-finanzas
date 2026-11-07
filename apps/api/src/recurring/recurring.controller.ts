@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, HttpCode, Param, Patch, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
-import { ConfirmRecurringDto, CreateRecurringDto, UpdateRecurringDto } from './recurring.dto';
+import { ConfirmRecurringDto, ConfirmReserveDto, CreateRecurringDto, UpdateRecurringDto } from './recurring.dto';
 import { RecurringService } from './recurring.service';
 
 @ApiTags('recurring') @ApiBearerAuth()
@@ -17,6 +17,21 @@ export class RecurringController {
   @Get('due')
   due(@CurrentUser() u: AuthUser) {
     return this.recurring.due(u.id);
+  }
+
+  @Get('reserves/due')
+  reservesDue(@CurrentUser() u: AuthUser) {
+    return this.recurring.reservesDue(u.id);
+  }
+
+  @Post(':id/reserve') @HttpCode(200)
+  confirmReserve(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ConfirmReserveDto) {
+    return this.recurring.confirmReserve(u.id, id, dto);
+  }
+
+  @Post(':id/reserve/skip') @HttpCode(200)
+  skipReserve(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.recurring.skipReserve(u.id, id);
   }
 
   @Get(':id')

@@ -40,7 +40,7 @@ export default function InvitacionPage() {
     try {
       const body = info.data?.kind === 'RESET'
         ? { password }
-        : { password, name: String(fd.get('name')).trim(), email: String(fd.get('email')).trim() };
+        : { password, name: String(fd.get('name')).trim(), email: String(fd.get('email')).trim(), phone: String(fd.get('phone') ?? '').trim() || null };
       const { accessToken } = await api<{ accessToken: string }>(`/auth/invitations/${encodeURIComponent(token)}/accept`, { method: 'POST', json: body });
       // Si en este equipo había otra sesión, se olvida lo que tenía en pantalla
       qc.clear();
@@ -78,6 +78,7 @@ export default function InvitacionPage() {
                 <>
                   <Field label="Tu nombre"><Input name="name" defaultValue={info.data.name ?? ''} required maxLength={60} autoComplete="given-name" autoFocus /></Field>
                   <Field label="Correo" hint="Con él vas a entrar"><Input name="email" type="email" required autoComplete="email" /></Field>
+                  <Field label="WhatsApp (opcional)" hint="Con código de país, para que te puedan mandar recordatorios"><Input name="phone" inputMode="tel" autoComplete="tel" placeholder="+58 412 123 4567" maxLength={25} /></Field>
                 </>
               )}
               <Field label={reset ? 'Nueva contraseña' : 'Contraseña'} hint="Mínimo 8 caracteres">

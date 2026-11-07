@@ -10,7 +10,9 @@ export type NotificationType = 'BUDGET_NEAR' | 'BUDGET_EXCEEDED' | 'RECURRING_DU
   | 'INSTALLMENT_DUE'
   | 'INSTALLMENT_OVERDUE'
   | 'SHARED_WITH_ME'
-  | 'FAMILY_JOINED';
+  | 'FAMILY_JOINED'
+  | 'RESERVE_DUE'
+  | 'RESERVE_SHORT';
 export interface AppNotification {
   id: string;
   type: NotificationType;

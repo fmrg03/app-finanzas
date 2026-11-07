@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ChartPie, Coins, Goal, HandCoins, LandPlot, Menu, Repeat, Settings, Tags, Target, Wallet } from 'lucide-react';
+import { ArrowLeftRight, CalendarRange, ChartPie, Coins, Goal, HandCoins, LandPlot, Menu, Repeat, Settings, Tags, Target, Wallet } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
@@ -14,6 +14,7 @@ export const NAV_GROUPS = [
     label: 'Planificación',
     items: [
       { href: '/presupuestos', label: 'Presupuestos', icon: Target },
+      { href: '/proyeccion', label: 'Proyección', icon: CalendarRange },
       { href: '/recurrentes', label: 'Recurrentes', icon: Repeat },
       { href: '/metas', label: 'Metas de ahorro', icon: Goal },
       { href: '/deudas', label: 'Deudas y cuotas', icon: HandCoins },

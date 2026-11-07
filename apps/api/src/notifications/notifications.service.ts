@@ -4,6 +4,7 @@ import { BudgetsService } from '../budgets/budgets.service';
 import { goalPlan, previousMonth } from '../goals/goal-plan';
 import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { reserveStatus } from '../recurring/schedule';
 
 /** Avisa cuando queda este porcentaje o menos del presupuesto. */
 export const BUDGET_NEAR_REMAINING_PCT = 5;
@@ -13,6 +14,8 @@ export const GOAL_DEADLINE_DAYS = [30, 7];
 export const GOAL_REMINDER_DAY = 20;
 /** Días antes del vencimiento de una cuota en que se avisa. */
 export const INSTALLMENT_NOTICE_DAYS = 2;
+/** Días antes de un pago con apartado en que se avisa si lo apartado no alcanza. */
+export const RESERVE_SHORT_DAYS = 15;
 
 interface Candidate {
   type: NotificationType;
@@ -85,6 +88,7 @@ export class NotificationsService {
       ...(await this.debtCandidates(userId)),
       ...(await this.goalCandidates(userId)),
       ...(await this.installmentCandidates(userId)),
+      ...(await this.reserveCandidates(userId)),
     ];
     if (!candidates.length) return 0;
     const { count } = await this.prisma.notification.createMany({
@@ -187,6 +191,41 @@ export class NotificationsService {
         link: '/deudas?tab=cuotas',
       };
     });
+  }
+
+  /** Apartados por confirmar, y aviso si se acerca el pago y lo apartado no alcanza. */
+  private async reserveCandidates(userId: string): Promise<Candidate[]> {
+    const today = parseDateOnly(todayLocal());
+    const recs = await this.prisma.recurring.findMany({
+      where: { userId, active: true, reserve: true },
+      include: { reserves: { select: { amount: true } } },
+    });
+    const out: Candidate[] = [];
+    for (const r of recs) {
+      const st = reserveStatus(r);
+      if (!st) continue;
+      if (r.reserveNextDate! <= today && Number(st.suggested) > 0) {
+        out.push({
+          type: 'RESERVE_DUE',
+          dedupeKey: `reserve:${r.id}:${st.nextDate}`,
+          title: `Aparta para ${r.description}`,
+          body: `Toca apartar ${money(st.suggested, r.currency)} este mes. Llevas ${money(st.balance, r.currency)} de ${money(r.amount, r.currency)}; se paga el ${dmy(r.nextDate)}.`,
+          link: '/recurrentes',
+        });
+      }
+      const days = Math.round((r.nextDate.getTime() - today.getTime()) / 86_400_000);
+      const missing = Number(r.amount) - Number(st.balance);
+      if (days >= 0 && days <= RESERVE_SHORT_DAYS && missing > 0.005) {
+        out.push({
+          type: 'RESERVE_SHORT',
+          dedupeKey: `reserve-short:${r.id}:${toDateOnly(r.nextDate)}`,
+          title: `Te falta apartar para ${r.description}`,
+          body: `Se paga el ${dmy(r.nextDate)} y llevas ${money(st.balance, r.currency)} de ${money(r.amount, r.currency)}: faltan ${money(missing, r.currency)}.`,
+          link: '/recurrentes',
+        });
+      }
+    }
+    return out;
   }
 
   private async goalCandidates(userId: string): Promise<Candidate[]> {

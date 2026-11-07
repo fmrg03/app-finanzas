@@ -2,13 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import type { BudgetStatus, Debt, DebtPaymentItem, Goal, InstallmentPlan, Member, NetWorth, PendingInvitation, Person, Recurring, Transfer, UpcomingInstallments } from './types';
+import type { BudgetStatus, Debt, DebtPaymentItem, Goal, InstallmentPlan, Member, NetWorth, PendingInvitation, Person, Projection, Recurring, Transfer, UpcomingInstallments } from './types';
 
 /** Todo lo que cambia saldos o totales: se refresca junto. */
 function useInvalidateAll() {
   const qc = useQueryClient();
   return () => {
-    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications', 'debts', 'people', 'installments', 'family']) qc.invalidateQueries({ queryKey: [k] });
+    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications', 'debts', 'people', 'installments', 'family', 'projection']) qc.invalidateQueries({ queryKey: [k] });
   };
 }
 
@@ -32,6 +32,9 @@ export const useTransfers = (from?: string, to?: string) =>
 
 export const useRecurring = () => useQuery({ queryKey: ['recurring', 'all'], queryFn: () => api<Recurring[]>('/recurring') });
 export const useRecurringDue = () => useQuery({ queryKey: ['recurring', 'due'], queryFn: () => api<Recurring[]>('/recurring/due') });
+export const useReservesDue = () => useQuery({ queryKey: ['recurring', 'reserves-due'], queryFn: () => api<Recurring[]>('/recurring/reserves/due') });
+export const useProjection = (months = 3) =>
+  useQuery({ queryKey: ['projection', months], queryFn: () => api<Projection>(`/projection?months=${months}`) });
 
 export const useBudgets = (month?: string) =>
   useQuery({ queryKey: ['budgets', month], queryFn: () => api<BudgetStatus>(`/budgets${month ? `?month=${month}` : ''}`), placeholderData: (p) => p });

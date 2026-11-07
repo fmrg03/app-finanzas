@@ -60,10 +60,12 @@ export default function AjustesPage() {
 function Preferences({ me }: { me: Me }) {
   const qc = useQueryClient();
   const mut = useMutation({
-    mutationFn: (b: Partial<Pick<Me, 'defaultCurrency' | 'defaultRateSource'>> & { name?: string }) => api<Me>('/auth/me', { method: 'PATCH', json: b }),
-    onSuccess: (data) => { qc.setQueryData(['me'], data); qc.invalidateQueries({ queryKey: ['family'] }); },
+    mutationFn: (b: Partial<Pick<Me, 'defaultCurrency' | 'defaultRateSource'>> & { name?: string; phone?: string | null }) => api<Me>('/auth/me', { method: 'PATCH', json: b }),
+    onSuccess: (data) => { qc.setQueryData(['me'], data); qc.invalidateQueries({ queryKey: ['family'] }); qc.invalidateQueries({ queryKey: ['people'] }); },
   });
   const [name, setName] = useState(me.name ?? '');
+  const shownPhone = me.phone ? `+${me.phone}` : '';
+  const [phone, setPhone] = useState(shownPhone);
   return (
     <section aria-labelledby="pref" className="mt-6 rounded-2xl bg-surface p-5">
       <h2 id="pref" className="font-bold">Preferencias</h2>
@@ -76,6 +78,15 @@ function Preferences({ me }: { me: Me }) {
             <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="Ej. Froilán" />
           </Field>
           <Button type="submit" variant="ghost" disabled={!name.trim() || name.trim() === (me.name ?? '') || mut.isPending}>Guardar</Button>
+        </form>
+        <form
+          className="flex flex-wrap items-end justify-between gap-3"
+          onSubmit={(e) => { e.preventDefault(); mut.mutate({ phone: phone.trim() || null }, { onSuccess: (d) => setPhone(d.phone ? `+${d.phone}` : '') }); }}
+        >
+          <Field label="Tu WhatsApp" hint="Con código de país. Tus familiares lo reciben en sus Personas para mandarte recordatorios." className="min-w-0 flex-1">
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="+58 412 123 4567" maxLength={25} />
+          </Field>
+          <Button type="submit" variant="ghost" disabled={phone.trim() === shownPhone || mut.isPending}>Guardar</Button>
         </form>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>

@@ -11,7 +11,7 @@ import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator
 import { AcceptInvitationDto } from '../auth/dto/auth.dto';
 import { CategoriesModule } from '../categories/categories.module';
 import { CategoriesService } from '../categories/categories.service';
-import { displayName, PeopleModule, PeopleService } from '../people/people.module';
+import { displayName, normalizePhone, PeopleModule, PeopleService } from '../people/people.module';
 import { PrismaService } from '../prisma/prisma.service';
 
 class CreateInvitationDto {
@@ -130,7 +130,7 @@ export class FamilyService {
 
     const user = await this.prisma.$transaction(async (db) => {
       await this.markUsed(db, inv.id);
-      const created = await db.user.create({ data: { email, passwordHash, name: dto.name!.trim(), role: 'MEMBER' } });
+      const created = await db.user.create({ data: { email, passwordHash, name: dto.name!.trim(), role: 'MEMBER', phone: normalizePhone(dto.phone) } });
       // Quedan vinculados en Personas, para compartir compras sin configurar nada
       await this.people.ensureLinkedPerson(inv.createdById, created, db);
       await this.people.ensureLinkedPerson(created.id, inv.createdBy, db);
@@ -151,7 +151,7 @@ export class FamilyService {
   private async valid(token: string) {
     const inv = await this.prisma.invitation.findUnique({
       where: { tokenHash: sha256(token) },
-      include: { createdBy: { select: { id: true, name: true, email: true } }, user: { select: { id: true, name: true, email: true, disabledAt: true } } },
+      include: { createdBy: { select: { id: true, name: true, email: true, phone: true } }, user: { select: { id: true, name: true, email: true, disabledAt: true } } },
     });
     if (!inv) throw new NotFoundException('Este enlace no existe. Pide uno nuevo.');
     if (inv.usedAt) throw new GoneException('Este enlace ya se usó. Pide uno nuevo si lo necesitas.');

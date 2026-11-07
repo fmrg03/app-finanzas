@@ -11,6 +11,9 @@ export interface Account {
   initialBalance: string;
   balance: string;
   archivedAt: string | null;
+  /** Apartado para pagos de varios meses: sigue en la cuenta, pero ya tiene destino */
+  reserved: string;
+  reservedFor: { recurringId: string; description: string; amount: string }[];
 }
 
 export interface Category {
@@ -76,6 +79,8 @@ export interface SplitInput {
 export interface Person extends PersonRef {
   linkedUserId: string | null;
   linkedUser: { id: string; name: string | null; email: string; disabledAt: string | null } | null;
+  /** El WhatsApp viene de la cuenta del familiar (no se lo pusiste a mano) */
+  phoneFromAccount?: boolean;
   openDebts: number;
   owedToMeUsd: string;
   owedToMeVes: string;
@@ -193,7 +198,13 @@ export interface Transfer {
   description: string | null;
 }
 
-export type Frequency = 'WEEKLY' | 'MONTHLY';
+export type Frequency = 'WEEKLY' | 'MONTHLY' | 'QUARTERLY' | 'SEMIANNUAL' | 'ANNUAL';
+export const RECURRING_FREQ: Record<Frequency, string> = {
+  WEEKLY: 'Cada semana', MONTHLY: 'Cada mes', QUARTERLY: 'Cada 3 meses', SEMIANNUAL: 'Cada 6 meses', ANNUAL: 'Cada año',
+};
+/** Meses entre pagos; solo los de varios meses admiten apartado. */
+export const FREQ_MONTHS: Record<Frequency, number> = { WEEKLY: 12 / 52, MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
+export const canReserve = (f: Frequency) => FREQ_MONTHS[f] > 1;
 export interface Recurring {
   id: string;
   type: TxType;
@@ -212,6 +223,11 @@ export interface Recurring {
   endDate: string | null;
   autoCreate: boolean;
   active: boolean;
+  reserve: boolean;
+  reserveDay: number | null;
+  reserveNextDate: string | null;
+  /** Lo apartado hasta ahora, lo que conviene apartar esta vez y cuántos apartados quedan antes del pago */
+  reserveStatus: { balance: string; suggested: string; left: number; nextDate: string } | null;
 }
 
 export interface BudgetItem {
@@ -316,3 +332,31 @@ export interface NetWorth {
   accounts: { id: string; name: string; type: AccountType; currency: Currency; archived: boolean; balance: string; balanceUsd: string | null }[];
   months: { month: string; date: string; rate: string | null; usd: string; ves: string; vesInUsd: string | null; netUsd: string; devaluationUsd: string }[];
 }
+
+export type MoneyBoth = { usd: string; ves: string };
+export interface ProjectedItem {
+  key: string;
+  date: string;
+  kind: 'RECURRING' | 'INSTALLMENT' | 'RESERVE';
+  type: 'INCOME' | 'EXPENSE' | 'RESERVE';
+  description: string;
+  detail: string | null;
+  category: { id: string; name: string; color: string } | null;
+  account: { id: string; name: string } | null;
+  currency: Currency;
+  amount: string;
+  amountUsd: string;
+  amountVes: string;
+  overdue: boolean;
+  fundedUsd: string;
+  fundedVes: string;
+  recurringId: string | null;
+  planId: string | null;
+}
+export interface ProjectedMonth {
+  month: string;
+  partial: boolean;
+  items: ProjectedItem[];
+  totals: { income: MoneyBoth; expense: MoneyBoth; reserve: MoneyBoth; funded: MoneyBoth; installments: MoneyBoth; free: MoneyBoth; count: number };
+}
+export interface Projection { today: string; rates: Record<string, string>; months: ProjectedMonth[] }

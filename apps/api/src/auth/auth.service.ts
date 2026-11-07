@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { createHash, randomUUID } from 'crypto';
+import { normalizePhone } from '../people/people.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangePasswordDto, LoginDto, RegisterDto, UpdateMeDto } from './dto/auth.dto';
 
@@ -74,14 +75,25 @@ export class AuthService {
   async me(userId: string) {
     return this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
-      select: { id: true, email: true, name: true, role: true, defaultCurrency: true, defaultRateSource: true, createdAt: true },
+      select: { id: true, email: true, name: true, phone: true, role: true, defaultCurrency: true, defaultRateSource: true, createdAt: true },
     });
   }
 
   async updateMe(userId: string, dto: UpdateMeDto) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { defaultCurrency: dto.defaultCurrency, defaultRateSource: dto.defaultRateSource, name: dto.name?.trim() },
+    const phone = dto.phone === undefined ? undefined : normalizePhone(dto.phone);
+    await this.prisma.$transaction(async (db) => {
+      const before = await db.user.findUniqueOrThrow({ where: { id: userId }, select: { phone: true } });
+      await db.user.update({
+        where: { id: userId },
+        data: { defaultCurrency: dto.defaultCurrency, defaultRateSource: dto.defaultRateSource, name: dto.name?.trim(), phone },
+      });
+      // Tus familiares te tienen en sus personas: se les actualiza tu WhatsApp si no le habían puesto otro
+      if (phone !== undefined && phone !== before.phone) {
+        await db.person.updateMany({
+          where: { linkedUserId: userId, OR: [{ phone: null }, ...(before.phone ? [{ phone: before.phone }] : [])] },
+          data: { phone },
+        });
+      }
     });
     return this.me(userId);
   }

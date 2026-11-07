@@ -40,7 +40,14 @@ export default function CuentasPage() {
                   <span className="block truncate font-semibold">{a.name}</span>
                   <span className="text-xs text-muted">{ACCOUNT_LABEL[a.type]}{a.archivedAt ? ', archivada' : ''}</span>
                 </span>
-                <span className={cn('text-lg font-extrabold tabular-nums', Number(a.balance) < 0 && 'text-expense')}>{money(a.balance, a.currency)}</span>
+                <span className="flex flex-col items-end">
+                  <span className={cn('text-lg font-extrabold tabular-nums', Number(a.balance) < 0 && 'text-expense')}>{money(a.balance, a.currency)}</span>
+                  {Number(a.reserved) > 0 && (
+                    <span className="text-xs tabular-nums text-muted" title={a.reservedFor.map((r) => `${r.description}: ${money(r.amount, a.currency)}`).join('\n')}>
+                      {money(a.reserved, a.currency)} apartado, libre {money(Number(a.balance) - Number(a.reserved), a.currency)}
+                    </span>
+                  )}
+                </span>
               </button>
             </li>
           ))}

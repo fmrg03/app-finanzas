@@ -1,7 +1,7 @@
 'use client';
 
 import * as Popover from '@radix-ui/react-popover';
-import { Bell, CalendarClock, CalendarX, CircleAlert, CreditCard, Gauge, HandCoins, Repeat, TrendingDown, Trophy, UserPlus, Users, X } from 'lucide-react';
+import { Bell, CalendarClock, CalendarX, CircleAlert, CreditCard, Gauge, HandCoins, PiggyBank, Repeat, TrendingDown, Trophy, UserPlus, Users, X } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/format';
@@ -20,6 +20,8 @@ const META: Record<NotificationType, { icon: typeof Bell; tone: string }> = {
   INSTALLMENT_OVERDUE: { icon: CreditCard, tone: 'bg-expense-soft text-expense' },
   SHARED_WITH_ME: { icon: Users, tone: 'bg-accent-soft text-accent' },
   FAMILY_JOINED: { icon: UserPlus, tone: 'bg-income-soft text-income' },
+  RESERVE_DUE: { icon: PiggyBank, tone: 'bg-accent-soft text-accent' },
+  RESERVE_SHORT: { icon: PiggyBank, tone: 'bg-warning-soft text-warning' },
 };
 
 function TypeIcon({ type, size = 16 }: { type: NotificationType; size?: number }) {

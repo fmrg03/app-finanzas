@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { CHART, LegendItem, MonthlyBars, MonthlyTable, PaceChart } from '@/components/charts';
 import { DueRecurring } from '@/components/due-recurring';
 import { UpcomingInstallments } from '@/components/upcoming-installments';
+import { ProjectionCard } from '@/components/projection-card';
 import { budgetTone, Progress } from '@/components/progress';
 import { useBudgets } from '@/lib/planning';
 import { MonthNav, useMonth } from '@/components/month-nav';
@@ -70,6 +71,7 @@ export default function ResumenPage() {
           </section>
 
           {nav.isCurrent && <BudgetsGlance />}
+          {nav.isCurrent && <ProjectionCard currency={currency} />}
 
           <section aria-labelledby="categorias" className="mt-4 rounded-2xl bg-surface p-5 sm:p-6">
             <h2 id="categorias" className="text-lg font-bold">En qué se fue</h2>

@@ -42,6 +42,15 @@ enum TransactionSource {
 enum RecurrenceFrequency {
   WEEKLY
   MONTHLY
+  QUARTERLY
+  SEMIANNUAL
+  ANNUAL
+}
+
+// Movimiento del apartado de un recurrente: lo que separas cada mes (+) o lo que se usó al pagar (-)
+enum ReserveKind {
+  SET_ASIDE
+  USED
 }
 
 enum DebtDirection {
@@ -62,6 +71,8 @@ enum NotificationType {
   INSTALLMENT_OVERDUE
   SHARED_WITH_ME
   FAMILY_JOINED
+  RESERVE_DUE
+  RESERVE_SHORT
 }
 
 enum UserRole {
@@ -104,6 +115,8 @@ model User {
   defaultCurrency   Currency   @default(USD)
   defaultRateSource RateSource @default(BCV)
   name              String?
+  // WhatsApp con código de país, solo dígitos: lo ven los familiares que te tienen en sus personas
+  phone             String?
   role              UserRole   @default(MEMBER)
   // Desactivado por el administrador: no puede entrar
   disabledAt        DateTime?
@@ -302,14 +315,35 @@ model Recurring {
   // true: se registra solo; false: queda pendiente para confirmar el monto
   autoCreate  Boolean             @default(false)
   active      Boolean             @default(true)
+  // Apartado mensual para gastos que se pagan cada varios meses (seguro trimestral, impuesto anual).
+  // El dinero no se mueve: queda reservado dentro de la cuenta del recurrente hasta el pago.
+  reserve         Boolean   @default(false)
+  // Día del mes en que se pide confirmar el apartado (1 a 28)
+  reserveDay      Int?
+  reserveNextDate DateTime? @db.Date
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
-  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  user     User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account  Account            @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  category Category?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  reserves RecurringReserve[]
 
   @@index([userId, nextDate])
+}
+
+// Historial del apartado, en la moneda del recurrente. El saldo apartado es la suma.
+model RecurringReserve {
+  id          String      @id @default(cuid())
+  recurringId String
+  kind        ReserveKind
+  date        DateTime    @db.Date
+  amount      Decimal     @db.Decimal(18, 2)
+  createdAt   DateTime    @default(now())
+
+  recurring Recurring @relation(fields: [recurringId], references: [id], onDelete: Cascade)
+
+  @@index([recurringId, date])
 }
 
 // Tope mensual de gasto por categoría principal, en dólares
