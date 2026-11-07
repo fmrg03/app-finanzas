@@ -254,6 +254,9 @@ function DebtForm({ debt, direction, onDone }: { debt?: Debt; direction: DebtDir
   const save = useApiMutation((b: object) => (debt ? api(`/debts/${debt.id}`, { method: 'PATCH', json: b }) : api('/debts', { method: 'POST', json: b })));
   const del = useApiMutation(() => api(`/debts/${debt!.id}`, { method: 'DELETE' }));
   const fixed = !!debt?.fromShared;
+  const linked = !!debt?.linkedManual;
+  const [personName, setPersonName] = useState(debt?.person ?? '');
+  const linkedPerson = people.find((p) => p.linkedUserId && p.name.toLowerCase() === personName.trim().toLowerCase());
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -261,7 +264,7 @@ function DebtForm({ debt, direction, onDone }: { debt?: Debt; direction: DebtDir
     const common = { description: String(fd.get('description')), dueDate: String(fd.get('dueDate')) || null };
     try {
       await save.mutateAsync(
-        fixed ? common : { ...common, direction: dir, currency, person: String(fd.get('person')), amount: toApi(String(fd.get('amount'))) },
+        fixed ? common : { ...common, direction: dir, currency, ...(linked ? {} : { person: personName }), amount: toApi(String(fd.get('amount'))) },
       );
       onDone();
     } catch (err) {
@@ -273,8 +276,13 @@ function DebtForm({ debt, direction, onDone }: { debt?: Debt; direction: DebtDir
       {fixed && <p className="rounded-lg bg-accent-soft px-3 py-2 text-sm">Viene de un movimiento compartido: el monto y la persona se cambian desde ese movimiento.</p>}
       {!fixed && <Segmented<DebtDirection> label="Tipo" value={dir} onChange={setDir} options={[{ value: 'I_OWE', label: 'Yo debo' }, { value: 'OWED_TO_ME', label: 'Me deben' }]} />}
       <Field label={dir === 'I_OWE' ? 'A quién' : 'Quién'}>
-        <Input name="person" defaultValue={debt?.person} required maxLength={80} autoFocus={!fixed} disabled={fixed} list="people-names" />
+        <Input name="person" value={personName} onChange={(e) => setPersonName(e.target.value)} required maxLength={80} autoFocus={!fixed && !debt} disabled={fixed || linked} list="people-names" />
       </Field>
+      {!fixed && (linked || linkedPerson) && (
+        <p className="-mt-2 flex items-center gap-1 text-xs text-accent">
+          <Link2 size={12} /> {linked ? `${debt!.person} la ve en su cuenta: lo que cambies aquí también cambia allá.` : `${linkedPerson!.name} usa la app: le aparecerá en su cuenta (verá que ${dir === 'I_OWE' ? 'le debes' : 'te debe'}).`}
+        </p>
+      )}
       <datalist id="people-names">{people.map((p) => <option key={p.id} value={p.name} />)}</datalist>
       <Field label="Concepto (opcional)"><Input name="description" defaultValue={debt?.description ?? ''} placeholder="Ej. Préstamo para el carro" maxLength={300} /></Field>
       <div className="grid grid-cols-[1fr_auto] items-end gap-3">
@@ -284,7 +292,7 @@ function DebtForm({ debt, direction, onDone }: { debt?: Debt; direction: DebtDir
       <Field label="Vence (opcional)"><Input type="date" name="dueDate" defaultValue={debt?.dueDate ?? ''} /></Field>
       {error && <ErrorNote>{error}</ErrorNote>}
       <div className="flex items-center gap-2">
-        {debt && !fixed && <Button type="button" variant="danger" onClick={async () => { if (confirm('¿Eliminar la deuda y sus abonos? También se borran los gastos o ingresos que generaron.')) { await del.mutateAsync(undefined); onDone(); } }}>Eliminar</Button>}
+        {debt && !fixed && <Button type="button" variant="danger" onClick={async () => { if (confirm(`¿Eliminar la deuda y sus abonos? También se borran los gastos o ingresos que generaron.${linked ? ` Se borra también de la cuenta de ${debt.person}.` : ''}`)) { await del.mutateAsync(undefined); onDone(); } }}>Eliminar</Button>}
         <Button type="submit" className="ml-auto" disabled={save.isPending}>{debt ? 'Guardar' : 'Crear'}</Button>
       </div>
     </form>

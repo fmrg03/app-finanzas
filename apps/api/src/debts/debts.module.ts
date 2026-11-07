@@ -99,6 +99,7 @@ class DebtsService {
   }
 
   async list(userId: string) {
+    await this.linkPending(userId).catch(() => undefined);
     const debts = await this.prisma.debt.findMany({
       where: { userId },
       include: {
@@ -126,6 +127,8 @@ class DebtsService {
         // La deuda se ve igual en la cuenta del familiar y los abonos se copian
         synced: !!d.linkedDebtId,
         sharedBy: d.shared?.mirrorOf ? displayName(d.shared.mirrorOf.user) : null,
+        // Deuda manual con un familiar: la ve en su cuenta (al revés) y los cambios se reflejan en las dos
+        linkedManual: !!d.linkedDebtId && !d.sharedId,
         shared: undefined,
         paid: paid.toFixed(2),
         remaining: remaining.toFixed(2),
@@ -137,12 +140,65 @@ class DebtsService {
   async create(userId: string, dto: CreateDebtDto) {
     const person = await this.personFor(userId, dto);
     if (!person) throw new BadRequestException('Indica la persona');
-    return this.prisma.debt.create({
+    const debt = await this.prisma.debt.create({
       data: {
         userId, direction: dto.direction, person: person.name, personId: person.id, description: dto.description?.trim() || null,
         currency: dto.currency, amount: positive(dto.amount), dueDate: dto.dueDate ? parseDateOnly(dto.dueDate) : null,
       },
     });
+    if (person.linkedUserId) await this.linkToFamily(debt.id);
+    return this.prisma.debt.findUniqueOrThrow({ where: { id: debt.id } });
+  }
+
+  /**
+   * Una deuda con un familiar que usa la app aparece también en su cuenta, al revés (si tú prestas, él debe).
+   * Los abonos ya hechos se copian. Le llega un aviso.
+   */
+  private async linkToFamily(debtId: string) {
+    await this.prisma.$transaction(async (db) => {
+      const d = await db.debt.findUniqueOrThrow({
+        where: { id: debtId },
+        include: { personRef: { include: { linkedUser: true } }, user: true, payments: true },
+      });
+      const target = d.personRef?.linkedUser;
+      if (d.linkedDebtId || d.sharedId || d.settledAt || !target || target.disabledAt || target.id === d.userId) return;
+      const me = await this.people.ensureLinkedPerson(target.id, d.user, db);
+      const copy = await db.debt.create({
+        data: {
+          userId: target.id, direction: d.direction === 'I_OWE' ? 'OWED_TO_ME' : 'I_OWE', person: me.name, personId: me.id,
+          description: d.description, currency: d.currency, amount: d.amount, dueDate: d.dueDate, linkedDebtId: d.id,
+        },
+      });
+      // Si otra petición la vinculó primero, no se duplica
+      const { count } = await db.debt.updateMany({ where: { id: d.id, linkedDebtId: null }, data: { linkedDebtId: copy.id } });
+      if (!count) throw new ConflictException('ya vinculada');
+      for (const p of d.payments) {
+        await db.debtPayment.create({ data: { debtId: copy.id, amount: p.amount, date: p.date, note: p.note, mirrorOfId: p.mirrorOfId ? undefined : p.id } });
+      }
+      const amt = `${d.currency === 'USD' ? '$' : 'Bs'} ${new Intl.NumberFormat('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(d.amount))}`;
+      const who = displayName(d.user);
+      await db.notification.create({
+        data: {
+          userId: target.id, type: 'SHARED_WITH_ME', dedupeKey: `debt:${copy.id}`, link: '/deudas',
+          title: `${who} registró una deuda contigo`,
+          body: `${copy.direction === 'I_OWE' ? `Le debes ${amt} a ${who}` : `${who} te debe ${amt}`}${d.description ? `: ${d.description}` : ''}.`,
+        },
+      });
+    }).catch((e) => {
+      if (!(e instanceof ConflictException)) throw e;
+    });
+  }
+
+  /** Vincula deudas abiertas con familiares que quedaron sin vincular (creadas antes, o antes de que la persona se uniera). */
+  private async linkPending(userId: string) {
+    const pending = await this.prisma.debt.findMany({
+      where: {
+        linkedDebtId: null, sharedId: null, settledAt: null, linkedFrom: null,
+        OR: [{ userId, personRef: { linkedUserId: { not: null } } }, { personRef: { linkedUserId: userId } }],
+      },
+      select: { id: true },
+    });
+    for (const d of pending) await this.linkToFamily(d.id);
   }
 
   async update(userId: string, id: string, dto: UpdateDebtDto) {
@@ -151,23 +207,35 @@ class DebtsService {
       throw new ConflictException('Esta deuda viene de un movimiento compartido: cambia el reparto desde el movimiento.');
     }
     const person = await this.personFor(userId, dto);
-    await this.prisma.debt.update({
-      where: { id },
-      data: {
-        direction: dto.direction, person: person?.name, personId: person?.id, description: dto.description?.trim(), currency: dto.currency,
-        amount: dto.amount ? positive(dto.amount) : undefined,
-        dueDate: dto.dueDate === undefined ? undefined : dto.dueDate ? parseDateOnly(dto.dueDate) : null,
-      },
+    if (debt.linkedDebtId && person && person.id !== debt.personId) {
+      throw new ConflictException(`Esta deuda también está en la cuenta de ${debt.person}: para cambiar la persona, bórrala y créala de nuevo.`);
+    }
+    const common = {
+      description: dto.description?.trim(), currency: dto.currency,
+      amount: dto.amount ? positive(dto.amount) : undefined,
+      dueDate: dto.dueDate === undefined ? undefined : dto.dueDate ? parseDateOnly(dto.dueDate) : null,
+    };
+    await this.prisma.$transaction(async (db) => {
+      await db.debt.update({ where: { id }, data: { ...common, direction: dto.direction, person: person?.name, personId: person?.id } });
+      // Lo mismo en la cuenta del familiar, al revés
+      if (debt.linkedDebtId && !debt.sharedId) {
+        const dir = dto.direction ? (dto.direction === 'I_OWE' ? 'OWED_TO_ME' : 'I_OWE') : undefined;
+        await db.debt.update({ where: { id: debt.linkedDebtId }, data: { ...common, direction: dir } });
+      }
     });
+    if (debt.linkedDebtId) await this.syncSettled(debt.linkedDebtId);
+    if (person?.linkedUserId && !debt.linkedDebtId) await this.linkToFamily(id);
     return this.syncSettled(id);
   }
 
   async remove(userId: string, id: string) {
     const debt = await this.own(userId, id);
     if (debt.sharedId) throw new ConflictException('Esta deuda viene de un movimiento compartido: se borra al borrar el movimiento.');
-    // Con la deuda se van sus abonos y los gastos o ingresos que generaron
+    // Con la deuda se van sus abonos y los gastos o ingresos que generaron.
+    // Si está también en la cuenta del familiar, se borra allá; los abonos que él registró como movimiento le quedan como movimientos.
     await this.prisma.$transaction([
       this.prisma.transaction.deleteMany({ where: { userId, debtPayment: { debtId: id } } }),
+      ...(debt.linkedDebtId ? [this.prisma.debt.deleteMany({ where: { id: debt.linkedDebtId, sharedId: null } })] : []),
       this.prisma.debt.delete({ where: { id } }),
     ]);
   }

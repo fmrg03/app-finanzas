@@ -296,6 +296,8 @@ export interface Debt {
   fromShared: boolean;
   /** Enlazada con la misma deuda en la cuenta de un familiar: los abonos se copian */
   synced: boolean;
+  /** Deuda manual con un familiar: la ve en su cuenta y los cambios se reflejan */
+  linkedManual?: boolean;
   /** Nombre del familiar que registró la compra, si es una copia */
   sharedBy: string | null;
 }
