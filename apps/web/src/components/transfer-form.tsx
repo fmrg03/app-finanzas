@@ -25,26 +25,48 @@ export function TransferForm({ transfer, onDone, onBack }: { transfer?: Transfer
   const [out, setOut] = useState(transfer ? toInput(transfer.fromAmount) : '');
   const [inn, setInn] = useState(transfer && transfer.fromAmount !== transfer.toAmount ? toInput(transfer.toAmount) : '');
   const [description, setDescription] = useState(transfer?.description ?? '');
+  // Cambio de divisas: se escribe la tasa y se calcula lo que recibes (o, si llegó otro monto, se escribe a mano)
+  const [rateIn, setRateIn] = useState(transfer?.rate ? toInput(String(Math.round(Number(transfer.rate) * 10000) / 10000)) : '');
+  const [manual, setManual] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Si las cuentas llegan después de abrir el formulario, se eligen las dos primeras
+  // Si las cuentas llegan después de abrir el formulario, se eligen las dos primeras.
+  // "Entra a" nunca puede quedar igual a "Sale de": su lista no la muestra y el formulario
+  // creería que la plata sale y entra en la misma cuenta.
   useEffect(() => {
     if (!fromId && accounts.length) setFromId(accounts[0].id);
-    if (!toId && accounts.length > 1) setToId(accounts[1].id);
+    const other = accounts.find((a) => a.id !== (fromId || accounts[0]?.id));
+    if ((!toId || toId === fromId) && other) setToId(other.id);
   }, [accounts, fromId, toId]);
+
+  function pickFrom(id: string) {
+    setFromId(id);
+    if (id === toId) setToId(accounts.find((a) => a.id !== id)?.id ?? '');
+  }
 
   const from = accounts.find((a) => a.id === fromId);
   const to = accounts.find((a) => a.id === toId);
   const isFx = !!from && !!to && from.currency !== to.currency;
   const bcv = useRateForDate(date, 'BCV');
 
-  // Tasa obtenida en la operación y su diferencia con la BCV
+  // Lo que recibes según la tasa: de USD a Bs se multiplica, de Bs a USD se divide
+  const computed = useMemo(() => {
+    if (!isFx || manual || !(num(out) > 0) || !(num(rateIn) > 0)) return null;
+    const v = from!.currency === 'USD' ? num(out) * num(rateIn) : num(out) / num(rateIn);
+    return Math.round(v * 100) / 100;
+  }, [isFx, manual, out, rateIn, from]);
+  const received = isFx && !manual ? (computed !== null ? String(computed) : '') : toApi(inn);
+
+  // Tasa de la operación y su diferencia con la BCV del día
   const fx = useMemo(() => {
-    if (!isFx || !(num(out) > 0) || !(num(inn) > 0)) return null;
-    const r = from!.currency === 'USD' ? num(inn) / num(out) : num(out) / num(inn);
+    if (!isFx) return null;
+    const r = manual
+      ? num(out) > 0 && num(inn) > 0 ? (from!.currency === 'USD' ? num(inn) / num(out) : num(out) / num(inn)) : 0
+      : num(rateIn);
+    if (!(r > 0)) return null;
     const ref = Number(bcv.data?.rate);
     return { rate: r, vs: ref > 0 ? (r / ref - 1) * 100 : null };
-  }, [isFx, out, inn, from, bcv.data]);
+  }, [isFx, manual, out, inn, rateIn, from, bcv.data]);
 
   const save = useApiMutation((body: object) =>
     transfer ? api(`/transfers/${transfer.id}`, { method: 'PATCH', json: body }) : api('/transfers', { method: 'POST', json: body }),
@@ -57,11 +79,12 @@ export function TransferForm({ transfer, onDone, onBack }: { transfer?: Transfer
     if (!from || !to) return setError('Elige las dos cuentas');
     if (from.id === to.id) return setError('Elige dos cuentas distintas');
     if (!(num(out) > 0)) return setError('Escribe cuánto sale');
-    if (isFx && !(num(inn) > 0)) return setError(`Escribe cuánto recibiste en ${to.currency === 'USD' ? 'dólares' : 'bolívares'}`);
+    if (isFx && !manual && !(num(rateIn) > 0)) return setError('Escribe la tasa de cambio (Bs por dólar)');
+    if (isFx && !(Number(received) > 0)) return setError(`Escribe cuánto recibiste en ${to.currency === 'USD' ? 'dólares' : 'bolívares'}`);
     try {
       await save.mutateAsync({
         fromAccountId: from.id, toAccountId: to.id, date, fromAmount: toApi(out),
-        ...(inn ? { toAmount: toApi(inn) } : transfer ? { toAmount: toApi(out) } : {}),
+        ...(isFx ? { toAmount: received } : inn ? { toAmount: toApi(inn) } : transfer ? { toAmount: toApi(out) } : {}),
         description,
       });
       onDone();
@@ -91,7 +114,7 @@ export function TransferForm({ transfer, onDone, onBack }: { transfer?: Transfer
       <div className="rounded-xl border border-line p-4">
         <div className="grid gap-3 sm:grid-cols-[1fr_9rem]">
           <Field label="Sale de">
-            <Select value={fromId} onChange={(e) => setFromId(e.target.value)}>
+            <Select value={fromId} onChange={(e) => pickFrom(e.target.value)}>
               {accounts.map((a) => <option key={a.id} value={a.id}>{a.name} ({cur(a.currency)})</option>)}
             </Select>
           </Field>
@@ -106,25 +129,56 @@ export function TransferForm({ transfer, onDone, onBack }: { transfer?: Transfer
               {accounts.filter((a) => a.id !== fromId).map((a) => <option key={a.id} value={a.id}>{a.name} ({cur(a.currency)})</option>)}
             </Select>
           </Field>
-          <Field label={isFx ? `Recibes (${cur(to?.currency)})` : 'Recibes'} hint={isFx ? undefined : 'Solo si hubo comisión'}>
-            <Input inputMode="decimal" value={inn} onChange={(e) => setInn(e.target.value)} placeholder={isFx ? '0,00' : out || '0,00'} />
-          </Field>
+          {isFx && !manual ? (
+            <Field label="Tasa (Bs por USD)">
+              <Input inputMode="decimal" value={rateIn} onChange={(e) => setRateIn(e.target.value)} placeholder={bcv.data ? toInput(bcv.data.rate) : '0,00'} />
+            </Field>
+          ) : (
+            <Field label={isFx ? `Recibes (${cur(to?.currency)})` : 'Recibes'} hint={isFx ? undefined : 'Solo si hubo comisión'}>
+              <Input inputMode="decimal" value={inn} onChange={(e) => setInn(e.target.value)} placeholder={isFx ? '0,00' : out || '0,00'} />
+            </Field>
+          )}
         </div>
         {isFx && (
-          <p className="mt-3 text-sm tabular-nums text-muted">
+          <div className="mt-3 rounded-lg bg-canvas px-3 py-2 text-sm tabular-nums">
+            {!manual && (
+              <p>
+                Recibes{' '}
+                <strong className="text-base text-ink">{computed !== null ? money(computed, to!.currency) : `— ${cur(to?.currency)}`}</strong>
+              </p>
+            )}
             {fx ? (
-              <>
-                Tasa obtenida <strong className="text-ink">{fmtRate(fx.rate)}</strong>{' '}
+              <p className="text-muted">
+                {manual ? 'Tasa obtenida ' : 'Tasa '}<span className="text-ink">{fmtRate(fx.rate)}</span>
                 {fx.vs !== null && (
                   <span className={cn('ml-1 font-semibold', from?.currency === 'USD' ? (fx.vs >= 0 ? 'text-income' : 'text-expense') : fx.vs <= 0 ? 'text-income' : 'text-expense')}>
                     ({signedPct(fx.vs)} vs. BCV {fmtRate(bcv.data!.rate)})
                   </span>
                 )}
-              </>
+              </p>
             ) : (
-              'Es un cambio de moneda: escribe cuánto recibiste para ver la tasa.'
+              <p className="text-muted">
+                Es un cambio de moneda: escribe la tasa que te dieron.
+                {bcv.data && !manual && (
+                  <button type="button" onClick={() => setRateIn(toInput(bcv.data!.rate))} className="ml-1 font-semibold text-accent hover:underline">
+                    Usar BCV ({fmtRate(bcv.data.rate)})
+                  </button>
+                )}
+              </p>
             )}
-          </p>
+            <button
+              type="button"
+              onClick={() => {
+                // Al pasar a monto manual se arranca con lo calculado; al volver, con la tasa obtenida
+                if (!manual) setInn(computed !== null ? toInput(String(computed)) : '');
+                else if (fx) setRateIn(toInput(String(Math.round(fx.rate * 10000) / 10000)));
+                setManual((m) => !m);
+              }}
+              className="mt-1 text-xs font-semibold text-accent hover:underline"
+            >
+              {manual ? 'Calcular con la tasa' : '¿Te llegó otro monto? Escríbelo a mano'}
+            </button>
+          </div>
         )}
         {!isFx && num(inn) > 0 && num(out) > num(inn) && (
           <p className="mt-3 text-sm text-muted">Comisión: {money(num(out) - num(inn), from!.currency)}</p>
