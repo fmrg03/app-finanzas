@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Button, ErrorNote, Field, Input } from '@/components/ui/controls';
@@ -11,10 +12,14 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   // Hasta que React toma el control, el botón no envía nada
   const [ready, setReady] = useState(false);
+  const qc = useQueryClient();
   useEffect(() => {
+    // Al llegar aquí (por ejemplo tras cerrar sesión) se olvida lo que mostraba la sesión anterior:
+    // en un equipo que usan varios familiares, nadie ve los datos de otro
+    qc.clear();
     // Con la cookie de sesión vigente (por ejemplo al abrir la app instalada) se entra directo
     ensureSession().then((ok) => (ok ? router.replace('/resumen') : setReady(true)));
-  }, [router]);
+  }, [router, qc]);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();

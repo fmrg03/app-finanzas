@@ -5,6 +5,7 @@ import { ChevronRight, LogOut, Tags } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
+import { FamilySection } from '@/components/family-section';
 import { Button, ErrorNote, Field, Input, Segmented } from '@/components/ui/controls';
 import { api, logout } from '@/lib/api';
 import { useMe, useReceiptsStatus, type Me } from '@/lib/queries';
@@ -21,6 +22,8 @@ export default function AjustesPage() {
       {me && <p className="mt-1 text-muted">{me.email}</p>}
 
       {me && <Preferences me={me} />}
+
+      {me && <FamilySection isAdmin={me.role === 'ADMIN'} />}
 
       <Link href="/categorias" className="mt-4 flex items-center gap-3 rounded-2xl bg-surface px-5 py-4 hover:bg-white/70">
         <Tags size={20} className="text-accent" />
@@ -57,13 +60,23 @@ export default function AjustesPage() {
 function Preferences({ me }: { me: Me }) {
   const qc = useQueryClient();
   const mut = useMutation({
-    mutationFn: (b: Partial<Pick<Me, 'defaultCurrency' | 'defaultRateSource'>>) => api<Me>('/auth/me', { method: 'PATCH', json: b }),
-    onSuccess: (data) => qc.setQueryData(['me'], data),
+    mutationFn: (b: Partial<Pick<Me, 'defaultCurrency' | 'defaultRateSource'>> & { name?: string }) => api<Me>('/auth/me', { method: 'PATCH', json: b }),
+    onSuccess: (data) => { qc.setQueryData(['me'], data); qc.invalidateQueries({ queryKey: ['family'] }); },
   });
+  const [name, setName] = useState(me.name ?? '');
   return (
     <section aria-labelledby="pref" className="mt-6 rounded-2xl bg-surface p-5">
       <h2 id="pref" className="font-bold">Preferencias</h2>
       <div className="mt-4 flex flex-col gap-5">
+        <form
+          className="flex flex-wrap items-end justify-between gap-3"
+          onSubmit={(e) => { e.preventDefault(); if (name.trim()) mut.mutate({ name: name.trim() }); }}
+        >
+          <Field label="Tu nombre" hint="Así te ven tus familiares cuando comparten una compra" className="min-w-0 flex-1">
+            <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="Ej. Froilán" />
+          </Field>
+          <Button type="submit" variant="ghost" disabled={!name.trim() || name.trim() === (me.name ?? '') || mut.isPending}>Guardar</Button>
+        </form>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="font-medium">Moneda principal</p>

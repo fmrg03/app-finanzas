@@ -60,6 +60,8 @@ export interface SharedInfo {
   id: string;
   splitMode: SplitMode;
   totalUsd: string;
+  /** Copia de una compra que registró un familiar (solo lectura) */
+  mirrorOf?: { user: { id: string; name: string | null; email: string } } | null;
   paidBy: PersonRef | null;
   participants: { personId: string | null; pct: string; amountUsd: string; person: PersonRef | null }[];
 }
@@ -70,6 +72,8 @@ export interface SplitInput {
 }
 
 export interface Person extends PersonRef {
+  linkedUserId: string | null;
+  linkedUser: { id: string; name: string | null; email: string; disabledAt: string | null } | null;
   openDebts: number;
   owedToMeUsd: string;
   owedToMeVes: string;
@@ -259,7 +263,10 @@ export interface Debt {
   amount: string;
   dueDate: string | null;
   settledAt: string | null;
-  payments: { id: string; date: string; amount: string; note: string | null; accountAmount: string | null; account: { id: string; name: string; currency: Currency } | null }[];
+  payments: {
+    id: string; date: string; amount: string; note: string | null; accountAmount: string | null; mirrorOfId: string | null;
+    account: { id: string; name: string; currency: Currency } | null;
+  }[];
   paid: string;
   remaining: string;
   overdue: boolean;
@@ -267,7 +274,24 @@ export interface Debt {
   personRef: PersonRef | null;
   sharedId: string | null;
   fromShared: boolean;
+  /** Enlazada con la misma deuda en la cuenta de un familiar: los abonos se copian */
+  synced: boolean;
+  /** Nombre del familiar que registró la compra, si es una copia */
+  sharedBy: string | null;
 }
+
+export interface Member {
+  id: string;
+  email: string;
+  name: string | null;
+  displayName: string;
+  role: 'ADMIN' | 'MEMBER';
+  disabledAt: string | null;
+  createdAt: string;
+  me: boolean;
+}
+export interface InvitationLink { id: string; kind: 'INVITE' | 'RESET'; token: string; path: string; expiresAt: string }
+export interface PendingInvitation { id: string; name: string | null; expiresAt: string; createdAt: string; createdBy: string }
 
 export interface NetWorth {
   today: string;

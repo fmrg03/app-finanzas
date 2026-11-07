@@ -9,6 +9,7 @@ import { SplitEditor, emptySplit, previewParts, splitFromShared, splitProblem, s
 import { Button, ErrorNote, Field, Input, Segmented, Select } from '@/components/ui/controls';
 import { cn, money, rate as fmtRate, today } from '@/lib/format';
 import { api, ApiError, fetchBlobUrl } from '@/lib/api';
+import { usePeople } from '@/lib/planning';
 import { balances, planText, sharedTxText } from '@/lib/share';
 import { prepareReceipt } from '@/lib/image';
 import { useAccounts, useCategories, useDeleteTransaction, useInvalidateMoney, useMe, useRateForDate, useReadReceipt, useReceiptsStatus, useSaveTransaction, type TxInput } from '@/lib/queries';
@@ -73,7 +74,7 @@ export function TransactionForm({
   const [receipt, setReceipt] = useState<ReceiptRead | null>(null);
   const isShared = !!tx?.shared;
   // Inicial de una compra en cuotas, o cuota que se registró sola: los montos los define la compra
-  const locked = !!tx?.installmentPlanId && (!tx.installment || !tx.accountId);
+  const locked = (!!tx?.installmentPlanId && (!tx.installment || !tx.accountId)) || !!tx?.shared?.mirrorOf;
   const [sharedOn, setSharedOn] = useState(isShared || startWith === 'shared');
   const [split, setSplit] = useState<SplitState>(() =>
     tx?.shared ? splitFromShared(tx.shared, Number(tx.originalAmount), Number(tx.amountUsd)) : emptySplit(),
@@ -83,6 +84,9 @@ export function TransactionForm({
   const [done, setDone] = useState<{ kind: 'tx'; tx: Transaction } | { kind: 'plan'; plan: InstallmentPlan } | null>(null);
   const [busy, setBusy] = useState(false);
   const invalidate = useInvalidateMoney();
+  const { data: people = [] } = usePeople();
+  // Copia de una compra que registró un familiar: solo se cambian categoría, descripción y etiquetas
+  const mirrorBy = tx?.shared?.mirrorOf ? (tx.shared.mirrorOf.user.name ?? tx.shared.paidBy?.name ?? 'un familiar') : null;
   // Si los datos base llegan tarde se aplican, salvo que ya se haya leído una factura
   useEffect(() => { if (!receipt) setS(initial); }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -143,7 +147,7 @@ export function TransactionForm({
     const rateFields = { rateSource: s.rateSource, ...(s.rateSource === 'MANUAL' ? { rate: normAmount(s.manualRate) } : {}) };
     const base = { categoryId: s.categoryId || null, date: s.date, currency: s.currency, amount, ...rateFields };
     if (sharedOn) {
-      const problem = splitProblem(split, Number(amount));
+      const problem = splitProblem(split, Number(amount), people);
       if (problem) return setError(problem);
     }
     setBusy(true);
@@ -184,7 +188,7 @@ export function TransactionForm({
     if (!(Number(amount) > 0)) return setError('Escribe un monto mayor que cero');
     if (!s.accountId && !paidByOther && !locked) return setError('Elige una cuenta');
     if (s.rateSource === 'MANUAL' && !(Number(normAmount(s.manualRate)) > 0)) return setError('Escribe la tasa manual');
-    if (s.type === 'EXPENSE' && (sharedOn || cuotasOn)) return submitSpecial(amount);
+    if (s.type === 'EXPENSE' && (sharedOn || cuotasOn) && !editingMirror) return submitSpecial(amount);
 
     const full: TxInput = {
       type: s.type, accountId: s.accountId, categoryId: s.categoryId || null, date: s.date, currency: s.currency, amount,
@@ -205,7 +209,8 @@ export function TransactionForm({
       const moneyChanged =
         s.currency !== init.currency || Number(amount) !== Number(init.amount) || s.date !== init.date ||
         s.rateSource !== init.rateSource || (s.rateSource === 'MANUAL' && Number(normAmount(s.manualRate)) !== Number(init.manualRate));
-      if (moneyChanged) Object.assign(d, { currency: s.currency, amount, date: s.date, rateSource: s.rateSource, ...(full.rate ? { rate: full.rate } : {}) });
+      // En un movimiento bloqueado (inicial de cuotas, copia de un familiar) los montos no se tocan
+      if (moneyChanged && !locked) Object.assign(d, { currency: s.currency, amount, date: s.date, rateSource: s.rateSource, ...(full.rate ? { rate: full.rate } : {}) });
       if (!Object.keys(d).length) return onDone();
       data = d as TxInput;
     }
@@ -233,7 +238,8 @@ export function TransactionForm({
     }
   }
 
-  if (!accounts.length) {
+  // Sin cuentas no se puede registrar nada nuevo, pero sí abrir lo que te compartieron
+  if (!accounts.length && !tx) {
     return <p className="text-sm text-muted">Primero crea una cuenta (efectivo, banco…) en la sección Cuentas.</p>;
   }
 
@@ -241,6 +247,8 @@ export function TransactionForm({
 
   // Al editar, solo un compartido muestra su reparto; un movimiento normal no se convierte en compartido
   const canSpecial = s.type === 'EXPENSE' && !locked && !tx?.installmentPlanId && (!tx || isShared);
+  // Al editar una copia no se envía el reparto, solo los campos libres
+  const editingMirror = !!mirrorBy;
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-5">
@@ -256,7 +264,16 @@ export function TransactionForm({
           </p>
         </div>
       )}
-      {tx?.shared && (
+      {mirrorBy && (
+        <div className="flex items-start gap-2 rounded-xl bg-accent-soft p-3 text-sm">
+          <Users size={18} className="mt-0.5 shrink-0 text-accent" />
+          <p>
+            <strong>{mirrorBy}</strong> registró esta compra y te la compartió: tu parte es <strong>{money(tx!.myAmountUsd, 'USD')}</strong> y quedó como deuda en Deudas.
+            Aquí puedes cambiar categoría, descripción y etiquetas.
+          </p>
+        </div>
+      )}
+      {tx?.shared && !mirrorBy && (
         <SharePanel
           targets={balances(tx.shared).map((b) => ({ personId: b.personId, name: b.name, phone: b.phone, detail: b.owesMe ? `te debe ${money(b.amountUsd, 'USD')}` : `le debes ${money(b.amountUsd, 'USD')}` }))}
           build={(to, rate) => sharedTxText(tx, to, rate)}

@@ -5,6 +5,14 @@ export class RegisterDto {
   @IsEmail() email: string;
   // bcrypt ignora más de 72 bytes
   @IsString() @MinLength(8) @MaxLength(72) password: string;
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(60) name?: string;
+}
+
+export class AcceptInvitationDto {
+  // Para una invitación: nombre y correo de la cuenta nueva. Para restablecer: solo la contraseña.
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(60) name?: string;
+  @IsOptional() @IsEmail() email?: string;
+  @IsString() @MinLength(8) @MaxLength(72) password: string;
 }
 
 export class LoginDto {
@@ -17,6 +25,7 @@ export class RefreshDto {
 }
 
 export class UpdateMeDto {
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(60) name?: string;
   @IsOptional() @IsEnum(Currency) defaultCurrency?: Currency;
   @IsOptional() @IsEnum(RateSource) defaultRateSource?: RateSource;
 }

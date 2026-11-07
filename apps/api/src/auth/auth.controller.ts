@@ -1,10 +1,11 @@
-import { Body, Controller, Get, HttpCode, Patch, Post, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Patch, Post, Req, Res, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CookieOptions, Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
-import { ChangePasswordDto, LoginDto, RefreshDto, RegisterDto, UpdateMeDto } from './dto/auth.dto';
+import { FamilyService } from '../family/family.module';
+import { AcceptInvitationDto, ChangePasswordDto, LoginDto, RefreshDto, RegisterDto, UpdateMeDto } from './dto/auth.dto';
 import { Public } from './decorators/public.decorator';
 import { AuthUser, CurrentUser } from './decorators/current-user.decorator';
 
@@ -16,6 +17,7 @@ export class AuthController {
   constructor(
     private auth: AuthService,
     private config: ConfigService,
+    private family: FamilyService,
   ) {}
 
   // El refresh token viaja solo en una cookie httpOnly: el JavaScript del navegador no puede leerlo
@@ -55,6 +57,20 @@ export class AuthController {
       res.clearCookie(REFRESH_COOKIE, this.cookieOptions());
       throw e;
     }
+  }
+
+  /** Página pública de un enlace de invitación o de nueva contraseña. */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Public() @Get('invitations/:token')
+  invitation(@Param('token') token: string) {
+    return this.family.info(token);
+  }
+
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Public() @HttpCode(200) @Post('invitations/:token/accept')
+  async accept(@Param('token') token: string, @Body() dto: AcceptInvitationDto, @Res({ passthrough: true }) res: Response) {
+    const user = await this.family.accept(token, dto);
+    return this.withCookie(res, await this.auth.issueTokens(user.id, user.email));
   }
 
   @Public() @HttpCode(200) @Post('logout')

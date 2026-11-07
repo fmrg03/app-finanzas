@@ -187,6 +187,7 @@ function EmptyState({ monthName }: { monthName: string }) {
   const qc = useQueryClient();
   const { data: accounts } = useAccounts();
   const { data: categories } = useCategories();
+  const { data: me } = useMe();
   const seed = useMutation({ mutationFn: () => api('/categories/defaults', { method: 'POST' }), onSuccess: () => qc.invalidateQueries({ queryKey: ['categories'] }) });
   if (!accounts || !categories) return null;
 
@@ -203,7 +204,7 @@ function EmptyState({ monthName }: { monthName: string }) {
 
   return (
     <div className="mt-6 rounded-2xl bg-surface p-6">
-      <p className="text-lg font-bold">{setupDone ? `Todavía no hay movimientos en ${monthName}` : 'Empecemos'}</p>
+      <p className="text-lg font-bold">{setupDone ? `Todavía no hay movimientos en ${monthName}` : `${me?.name ? `Hola, ${me.name.split(' ')[0]}. ` : ''}Empecemos`}</p>
       <p className="mt-1 text-sm text-muted">Cuando registres gastos e ingresos, aquí verás en qué se va tu dinero y cómo vas contra el mes anterior.</p>
       <ol className="mt-5 flex flex-col gap-3">
         {steps.map((st, i) => (

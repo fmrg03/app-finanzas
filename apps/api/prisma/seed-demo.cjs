@@ -78,7 +78,7 @@ async function crear() {
   };
 
   const user = await prisma.user.create({
-    data: { email: EMAIL, passwordHash: await bcrypt.hash(PASSWORD, 12), defaultCurrency: 'USD', defaultRateSource: 'BCV' },
+    data: { email: EMAIL, passwordHash: await bcrypt.hash(PASSWORD, 12), name: 'Demo', defaultCurrency: 'USD', defaultRateSource: 'BCV' },
   });
   const userId = user.id;
 

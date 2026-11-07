@@ -7,7 +7,7 @@ import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
 import { convertAmounts } from '../common/money.util';
 import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
-import { PeopleModule, PeopleService } from '../people/people.module';
+import { displayName, PeopleModule, PeopleService } from '../people/people.module';
 import { PrismaService } from '../prisma/prisma.service';
 
 class CreateDebtDto {
@@ -55,6 +55,14 @@ class PaymentDto {
 
 const D = Prisma.Decimal;
 
+class PaymentAccountDto {
+  @ApiPropertyOptional({ nullable: true }) @IsOptional() @ValidateIf((_, v) => v !== null) @IsString()
+  accountId?: string | null;
+
+  @ApiPropertyOptional() @IsOptional() @IsNumberString()
+  rate?: string;
+}
+
 @Injectable()
 class DebtsService {
   constructor(
@@ -68,7 +76,8 @@ class DebtsService {
       where: { userId },
       include: {
         payments: { orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], include: { account: { select: { id: true, name: true, currency: true } } } },
-        personRef: { select: { id: true, name: true, phone: true } },
+        personRef: { select: { id: true, name: true, phone: true, linkedUserId: true } },
+        shared: { select: { mirrorOf: { select: { user: { select: { name: true, email: true } } } } } },
       },
       orderBy: [{ settledAt: { sort: 'asc', nulls: 'first' } }, { dueDate: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }],
     });
@@ -81,6 +90,10 @@ class DebtsService {
         dueDate: d.dueDate ? toDateOnly(d.dueDate) : null,
         payments: d.payments.map((p) => ({ ...p, date: toDateOnly(p.date) })),
         fromShared: !!d.sharedId,
+        // La deuda se ve igual en la cuenta del familiar y los abonos se copian
+        synced: !!d.linkedDebtId,
+        sharedBy: d.shared?.mirrorOf ? displayName(d.shared.mirrorOf.user) : null,
+        shared: undefined,
         paid: paid.toFixed(2),
         remaining: remaining.toFixed(2),
         overdue: !d.settledAt && !!d.dueDate && d.dueDate < today,
@@ -128,29 +141,53 @@ class DebtsService {
     const amount = positive(dto.amount);
     if (amount.gt(debt.amount.sub(paid))) throw new BadRequestException(`El abono supera lo pendiente (${debt.amount.sub(paid).toFixed(2)})`);
     const date = dto.date ?? todayLocal();
-    let accountAmount: Prisma.Decimal | null = null;
-    if (dto.accountId) {
-      const acc = await this.prisma.account.findFirst({ where: { id: dto.accountId, userId } });
-      if (!acc) throw new BadRequestException('La cuenta no existe');
-      if (acc.archivedAt) throw new BadRequestException('La cuenta está archivada');
-      // Abono en una cuenta de otra moneda: se convierte con la tasa indicada o la BCV del día
-      if (acc.currency !== debt.currency) {
-        const rate = dto.rate ? new D(dto.rate) : (await this.rates.resolve(date, 'BCV')).rate.rate;
-        if (rate.lte(0)) throw new BadRequestException('La tasa debe ser mayor que cero');
-        const c = convertAmounts(debt.currency, amount, rate);
-        accountAmount = acc.currency === 'USD' ? c.amountUsd : c.amountVes;
+    const accountAmount = dto.accountId ? await this.accountAmount(userId, dto.accountId, debt.currency, amount, date, dto.rate) : null;
+    await this.prisma.$transaction(async (db) => {
+      const payment = await db.debtPayment.create({
+        data: { debtId: id, amount, date: parseDateOnly(date), note: dto.note?.trim() || null, accountId: dto.accountId ?? null, accountAmount },
+      });
+      // Deuda compartida con un familiar: el abono aparece también en su lado, sin cuenta (la elige él)
+      if (debt.linkedDebtId) {
+        await db.debtPayment.create({
+          data: { debtId: debt.linkedDebtId, amount, date: payment.date, note: payment.note, mirrorOfId: payment.id },
+        });
       }
-    }
-    await this.prisma.debtPayment.create({
-      data: { debtId: id, amount, date: parseDateOnly(date), note: dto.note?.trim() || null, accountId: dto.accountId ?? null, accountAmount },
     });
+    if (debt.linkedDebtId) await this.syncSettled(debt.linkedDebtId);
     return this.syncSettled(id);
   }
 
+  /** Elige o cambia la cuenta de un abono, por ejemplo uno que registró el familiar. */
+  async setPaymentAccount(userId: string, id: string, paymentId: string, dto: PaymentAccountDto) {
+    const debt = await this.own(userId, id);
+    const p = await this.prisma.debtPayment.findFirst({ where: { id: paymentId, debtId: id } });
+    if (!p) throw new NotFoundException('Abono no encontrado');
+    const accountAmount = dto.accountId
+      ? await this.accountAmount(userId, dto.accountId, debt.currency, p.amount, toDateOnly(p.date), dto.rate)
+      : null;
+    await this.prisma.debtPayment.update({ where: { id: paymentId }, data: { accountId: dto.accountId ?? null, accountAmount } });
+    return this.syncSettled(id);
+  }
+
+  /** Monto en la moneda de la cuenta si es distinta de la de la deuda (tasa indicada o BCV del día). */
+  private async accountAmount(userId: string, accountId: string, currency: Currency, amount: Prisma.Decimal, date: string, rate?: string) {
+    const acc = await this.prisma.account.findFirst({ where: { id: accountId, userId } });
+    if (!acc) throw new BadRequestException('La cuenta no existe');
+    if (acc.archivedAt) throw new BadRequestException('La cuenta está archivada');
+    if (acc.currency === currency) return null;
+    const r = rate ? new D(rate) : (await this.rates.resolve(date, 'BCV')).rate.rate;
+    if (r.lte(0)) throw new BadRequestException('La tasa debe ser mayor que cero');
+    const c = convertAmounts(currency, amount, r);
+    return acc.currency === 'USD' ? c.amountUsd : c.amountVes;
+  }
+
   async removePayment(userId: string, id: string, paymentId: string) {
-    await this.own(userId, id);
-    const { count } = await this.prisma.debtPayment.deleteMany({ where: { id: paymentId, debtId: id } });
-    if (!count) throw new NotFoundException('Abono no encontrado');
+    const debt = await this.own(userId, id);
+    const p = await this.prisma.debtPayment.findFirst({ where: { id: paymentId, debtId: id } });
+    if (!p) throw new NotFoundException('Abono no encontrado');
+    // Un abono y su copia en la cuenta del familiar se borran juntos
+    await this.prisma.debtPayment.delete({ where: { id: p.mirrorOfId ?? p.id } });
+    if (debt.linkedDebtId) await this.syncSettled(debt.linkedDebtId).catch(() => undefined);
     return this.syncSettled(id);
   }
 
@@ -194,6 +231,10 @@ class DebtsController {
   @Patch(':id') update(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: UpdateDebtDto) { return this.debts.update(u.id, id, dto); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.debts.remove(u.id, id); }
   @Post(':id/payments') pay(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: PaymentDto) { return this.debts.pay(u.id, id, dto); }
+  @Patch(':id/payments/:pid')
+  setPaymentAccount(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('pid') pid: string, @Body() dto: PaymentAccountDto) {
+    return this.debts.setPaymentAccount(u.id, id, pid, dto);
+  }
   @Delete(':id/payments/:pid')
   removePayment(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('pid') pid: string) { return this.debts.removePayment(u.id, id, pid); }
 }

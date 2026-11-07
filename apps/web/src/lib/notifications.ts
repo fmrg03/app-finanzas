@@ -8,7 +8,9 @@ export type NotificationType = 'BUDGET_NEAR' | 'BUDGET_EXCEEDED' | 'RECURRING_DU
   | 'GOAL_BEHIND'
   | 'GOAL_MISSED'
   | 'INSTALLMENT_DUE'
-  | 'INSTALLMENT_OVERDUE';
+  | 'INSTALLMENT_OVERDUE'
+  | 'SHARED_WITH_ME'
+  | 'FAMILY_JOINED';
 export interface AppNotification {
   id: string;
   type: NotificationType;

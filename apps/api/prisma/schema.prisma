@@ -60,6 +60,19 @@ enum NotificationType {
   GOAL_MISSED
   INSTALLMENT_DUE
   INSTALLMENT_OVERDUE
+  SHARED_WITH_ME
+  FAMILY_JOINED
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+}
+
+// Enlace de un solo uso: invitar a un familiar o restablecer una contraseña
+enum InvitationKind {
+  INVITE
+  RESET
 }
 
 // Cómo se reparte un movimiento compartido
@@ -90,22 +103,29 @@ model User {
   refreshTokenHash  String?
   defaultCurrency   Currency   @default(USD)
   defaultRateSource RateSource @default(BCV)
+  name              String?
+  role              UserRole   @default(MEMBER)
+  // Desactivado por el administrador: no puede entrar
+  disabledAt        DateTime?
   createdAt         DateTime   @default(now())
   updatedAt         DateTime   @updatedAt
 
-  accounts      Account[]
-  categories    Category[]
-  transactions  Transaction[]
-  receipts      Receipt[]
-  transfers     Transfer[]
-  recurrings    Recurring[]
-  budgets       Budget[]
-  goals         SavingsGoal[]
-  debts         Debt[]
-  notifications Notification[]
+  accounts         Account[]
+  categories       Category[]
+  transactions     Transaction[]
+  receipts         Receipt[]
+  transfers        Transfer[]
+  recurrings       Recurring[]
+  budgets          Budget[]
+  goals            SavingsGoal[]
+  debts            Debt[]
+  notifications    Notification[]
   persons          Person[]
   sharedExpenses   SharedExpense[]
   installmentPlans InstallmentPlan[]
+  invitationsSent  Invitation[]      @relation("InvitationCreator")
+  invitationsFor   Invitation[]      @relation("InvitationTarget")
+  linkedPersons    Person[]          @relation("PersonLinkedUser")
 }
 
 model Account {
@@ -118,12 +138,12 @@ model Account {
   createdAt      DateTime    @default(now())
   archivedAt     DateTime?
 
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactions  Transaction[]
-  transfersFrom Transfer[]    @relation("TransferFrom")
-  transfersTo   Transfer[]    @relation("TransferTo")
-  recurrings    Recurring[]
-  debtPayments  DebtPayment[]
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions     Transaction[]
+  transfersFrom    Transfer[]        @relation("TransferFrom")
+  transfersTo      Transfer[]        @relation("TransferTo")
+  recurrings       Recurring[]
+  debtPayments     DebtPayment[]
   installmentPlans InstallmentPlan[]
 
   @@unique([userId, name])
@@ -141,12 +161,12 @@ model Category {
   defaultRateSource RateSource?
   createdAt         DateTime        @default(now())
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children     Category[]    @relation("CategoryTree")
-  transactions Transaction[]
-  recurrings   Recurring[]
-  budget       Budget?
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent           Category?         @relation("CategoryTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children         Category[]        @relation("CategoryTree")
+  transactions     Transaction[]
+  recurrings       Recurring[]
+  budget           Budget?
   installmentPlans InstallmentPlan[]
 
   @@unique([userId, parentId, name])
@@ -189,11 +209,11 @@ model Transaction {
   exchangeRateId   String?
 
   // Lo que cuenta como gasto/ingreso tuyo (resumen, presupuestos). Igual al monto, salvo en compartidos
-  myAmountUsd      Decimal    @db.Decimal(18, 2)
-  myAmountVes      Decimal    @db.Decimal(18, 2)
+  myAmountUsd       Decimal  @db.Decimal(18, 2)
+  myAmountVes       Decimal  @db.Decimal(18, 2)
   // Tu porcentaje en un movimiento compartido (null = 100 %)
-  sharePct         Decimal?   @db.Decimal(9, 6)
-  sharedId          String?   @unique
+  sharePct          Decimal? @db.Decimal(9, 6)
+  sharedId          String?  @unique
   installmentPlanId String?
 
   // Preparación para automatización
@@ -204,11 +224,11 @@ model Transaction {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account      Account?      @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  exchangeRate ExchangeRate? @relation(fields: [exchangeRateId], references: [id], onDelete: SetNull)
-  receipt      Receipt?
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account         Account?         @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  category        Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  exchangeRate    ExchangeRate?    @relation(fields: [exchangeRateId], references: [id], onDelete: SetNull)
+  receipt         Receipt?
   shared          SharedExpense?   @relation(fields: [sharedId], references: [id], onDelete: SetNull)
   installmentPlan InstallmentPlan? @relation(fields: [installmentPlanId], references: [id], onDelete: Cascade)
   installment     Installment?
@@ -340,25 +360,29 @@ model GoalContribution {
 }
 
 model Debt {
-  id          String        @id @default(cuid())
-  userId      String
-  direction   DebtDirection
-  person      String
-  personId    String?
+  id           String        @id @default(cuid())
+  userId       String
+  direction    DebtDirection
+  person       String
+  personId     String?
   // Deuda creada por un movimiento compartido (siempre en USD, fijada con la tasa del día de la compra)
-  sharedId    String?
-  description String?
-  currency    Currency
-  amount      Decimal       @db.Decimal(18, 2)
-  dueDate     DateTime?     @db.Date
-  settledAt   DateTime?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  sharedId     String?
+  // La misma deuda vista desde la cuenta del familiar: los abonos se copian entre ambas
+  linkedDebtId String?       @unique
+  description  String?
+  currency     Currency
+  amount       Decimal       @db.Decimal(18, 2)
+  dueDate      DateTime?     @db.Date
+  settledAt    DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
 
-  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  personRef Person?       @relation(fields: [personId], references: [id], onDelete: SetNull)
-  shared   SharedExpense? @relation(fields: [sharedId], references: [id], onDelete: Cascade)
-  payments DebtPayment[]
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  personRef  Person?        @relation(fields: [personId], references: [id], onDelete: SetNull)
+  shared     SharedExpense? @relation(fields: [sharedId], references: [id], onDelete: Cascade)
+  payments   DebtPayment[]
+  linkedDebt Debt?          @relation("DebtLink", fields: [linkedDebtId], references: [id], onDelete: SetNull)
+  linkedFrom Debt?          @relation("DebtLink")
 
   @@index([userId])
   @@index([personId])
@@ -366,19 +390,23 @@ model Debt {
 }
 
 model DebtPayment {
-  id        String   @id @default(cuid())
-  debtId    String
-  date      DateTime @db.Date
-  amount    Decimal  @db.Decimal(18, 2)
-  note      String?
+  id            String   @id @default(cuid())
+  debtId        String
+  date          DateTime @db.Date
+  amount        Decimal  @db.Decimal(18, 2)
+  note          String?
   // Cuenta donde entró (me pagaron) o de donde salió (pagué) el abono; mueve su saldo sin ser ingreso ni gasto
   accountId     String?
   // Monto en la moneda de la cuenta, si es distinta de la de la deuda
   accountAmount Decimal? @db.Decimal(18, 2)
-  createdAt DateTime @default(now())
+  // Copia del abono que registró el familiar en su lado de la deuda
+  mirrorOfId    String?  @unique
+  createdAt     DateTime @default(now())
 
-  debt    Debt     @relation(fields: [debtId], references: [id], onDelete: Cascade)
-  account Account? @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  debt     Debt         @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  account  Account?     @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  mirrorOf DebtPayment? @relation("PaymentMirror", fields: [mirrorOfId], references: [id], onDelete: Cascade)
+  mirror   DebtPayment? @relation("PaymentMirror")
 
   @@index([debtId])
 }
@@ -403,20 +431,24 @@ model Notification {
 
 // Persona con la que compartes gastos o tienes deudas
 model Person {
-  id        String   @id @default(cuid())
-  userId    String
-  name      String
+  id           String   @id @default(cuid())
+  userId       String
+  name         String
   // Número de WhatsApp con código de país, solo dígitos (ej. 584121234567)
-  phone     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  phone        String?
+  // Familiar que también usa la app: lo que compartes con esta persona aparece en su cuenta
+  linkedUserId String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  linkedUser   User?               @relation("PersonLinkedUser", fields: [linkedUserId], references: [id], onDelete: SetNull)
   debts        Debt[]
   participants SharedParticipant[]
   paidShared   SharedExpense[]
 
   @@unique([userId, name])
+  @@unique([userId, linkedUserId])
 }
 
 // Reparto de una compra entre varias personas. Montos en USD fijados con la tasa del día de la compra.
@@ -427,10 +459,14 @@ model SharedExpense {
   paidByPersonId String?
   splitMode      SplitMode
   totalUsd       Decimal   @db.Decimal(18, 2)
+  // Copia en la cuenta de un familiar del reparto que registró otro (solo lectura para quien la recibe)
+  mirrorOfId     String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mirrorOf     SharedExpense?      @relation("SharedMirror", fields: [mirrorOfId], references: [id], onDelete: Cascade)
+  mirrors      SharedExpense[]     @relation("SharedMirror")
   paidBy       Person?             @relation(fields: [paidByPersonId], references: [id], onDelete: Restrict)
   participants SharedParticipant[]
   debts        Debt[]
@@ -438,6 +474,7 @@ model SharedExpense {
   plan         InstallmentPlan?
 
   @@index([userId])
+  @@index([mirrorOfId])
 }
 
 model SharedParticipant {
@@ -475,9 +512,9 @@ model InstallmentPlan {
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt
 
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  account      Account?      @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category     Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  account      Account?       @relation(fields: [accountId], references: [id], onDelete: Restrict)
   shared       SharedExpense? @relation(fields: [sharedId], references: [id], onDelete: SetNull)
   installments Installment[]
   transactions Transaction[]
@@ -486,17 +523,35 @@ model InstallmentPlan {
 }
 
 model Installment {
-  id            String    @id @default(cuid())
+  id            String   @id @default(cuid())
   planId        String
   n             Int
-  dueDate       DateTime  @db.Date
-  amountUsd     Decimal   @db.Decimal(18, 2)
+  dueDate       DateTime @db.Date
+  amountUsd     Decimal  @db.Decimal(18, 2)
   // Movimiento con el que se pagó; vacío = pendiente
-  transactionId String?   @unique
+  transactionId String?  @unique
 
   plan        InstallmentPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
   transaction Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
 
   @@unique([planId, n])
   @@index([dueDate])
+}
+
+model Invitation {
+  id          String         @id @default(cuid())
+  kind        InvitationKind
+  // SHA-256 del token: el enlace solo se muestra al crearlo
+  tokenHash   String         @unique
+  // Nombre sugerido para quien se invita
+  name        String?
+  // Usuario al que se le restablece la contraseña (RESET)
+  userId      String?
+  createdById String
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime       @default(now())
+
+  user      User? @relation("InvitationTarget", fields: [userId], references: [id], onDelete: Cascade)
+  createdBy User  @relation("InvitationCreator", fields: [createdById], references: [id], onDelete: Cascade)
 }

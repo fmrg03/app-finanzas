@@ -11,6 +11,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateTransactionDto } from '../transactions/dto/transaction.dto';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { TransactionsService, TX_INCLUDE } from '../transactions/transactions.service';
+import { PeopleModule } from '../people/people.module';
+import { MirrorService } from './mirror.service';
 import { computeSplit } from './split';
 
 export class SplitParticipantDto {
@@ -52,6 +54,7 @@ export class SharedService {
   constructor(
     private prisma: PrismaService,
     private transactions: TransactionsService,
+    private mirrors: MirrorService,
   ) {}
 
   /** Valida que las personas sean tuyas y devuelve sus nombres. */
@@ -105,6 +108,7 @@ export class SharedService {
   }
 
   async create(userId: string, dto: CreateSharedTxDto) {
+    await this.mirrors.assertPayerNotLinked(userId, dto.split.paidByPersonId);
     const { category, accountId } = await this.validate(userId, dto);
     const base = await this.transactions.snapshot(userId, {
       currency: dto.currency, amount: dto.amount, date: dto.date, rateSource: dto.rateSource ?? category?.defaultRateSource ?? undefined, rate: dto.rate,
@@ -116,6 +120,8 @@ export class SharedService {
       const snapshot = { ...base, ...this.mine(base, s.myPct, s.myAmountUsd) };
       return this.transactions.insert(userId, { ...dto, accountId, categoryId: dto.categoryId ?? null, type: 'EXPENSE' }, snapshot, { sharedId: s.shared.id }, db);
     });
+    // A los familiares vinculados les aparece su parte en su cuenta
+    if (tx.sharedId) await this.mirrors.sync(tx.sharedId);
     return tx;
   }
 
@@ -124,6 +130,8 @@ export class SharedService {
     const current = await this.prisma.transaction.findFirst({ where: { id: txId, userId } });
     if (!current?.sharedId) throw new NotFoundException('Movimiento compartido no encontrado');
     const sharedId = current.sharedId;
+    await this.mirrors.assertNotMirror(sharedId, 'cambiarla');
+    await this.mirrors.assertPayerNotLinked(userId, dto.split.paidByPersonId);
     await this.transactions.assertNoPayments(sharedId);
     const { category, accountId } = await this.validate(userId, dto);
     const base = await this.transactions.snapshot(userId, {
@@ -143,6 +151,7 @@ export class SharedService {
         },
       });
     });
+    await this.mirrors.sync(sharedId);
     return this.transactions.findOne(userId, txId);
   }
 
@@ -181,5 +190,10 @@ class SharedController {
   @Put(':id') update(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: CreateSharedTxDto) { return this.shared.update(u.id, id, dto); }
 }
 
-@Module({ imports: [TransactionsModule], controllers: [SharedController], providers: [SharedService], exports: [SharedService] })
+@Module({
+  imports: [TransactionsModule, PeopleModule],
+  controllers: [SharedController],
+  providers: [SharedService, MirrorService],
+  exports: [SharedService, MirrorService],
+})
 export class SharedModule {}

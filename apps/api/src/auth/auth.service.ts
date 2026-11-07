@@ -23,14 +23,16 @@ export class AuthService {
 
   async register(dto: RegisterDto) {
     if (this.config.get('ALLOW_REGISTRATION') !== 'true') {
-      throw new ForbiddenException('El registro está deshabilitado');
+      throw new ForbiddenException('El registro está deshabilitado. Pide una invitación a quien administra la app.');
     }
     const email = dto.email.toLowerCase();
     if (await this.prisma.user.findUnique({ where: { email } })) {
       throw new ConflictException('Ese email ya está registrado');
     }
     const passwordHash = await bcrypt.hash(dto.password, 12);
-    const user = await this.prisma.user.create({ data: { email, passwordHash } });
+    // El primer usuario administra la familia
+    const first = (await this.prisma.user.count()) === 0;
+    const user = await this.prisma.user.create({ data: { email, passwordHash, name: dto.name?.trim() || null, role: first ? 'ADMIN' : 'MEMBER' } });
     return this.issueTokens(user.id, user.email);
   }
 
@@ -38,6 +40,7 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
     const ok = user && (await bcrypt.compare(dto.password, user.passwordHash));
     if (!user || !ok) throw new UnauthorizedException('Credenciales inválidas');
+    if (user.disabledAt) throw new ForbiddenException('Tu cuenta está desactivada. Habla con quien administra la app.');
     return this.issueTokens(user.id, user.email);
   }
 
@@ -51,7 +54,7 @@ export class AuthService {
       throw new UnauthorizedException('Refresh token inválido o vencido');
     }
     const user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
-    if (!user?.refreshTokenHash || user.refreshTokenHash !== sha256(refreshToken)) {
+    if (!user?.refreshTokenHash || user.refreshTokenHash !== sha256(refreshToken) || user.disabledAt) {
       throw new UnauthorizedException('Refresh token inválido o vencido');
     }
     return this.issueTokens(user.id, user.email); // rotación: el anterior queda inválido
@@ -71,12 +74,15 @@ export class AuthService {
   async me(userId: string) {
     return this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
-      select: { id: true, email: true, defaultCurrency: true, defaultRateSource: true, createdAt: true },
+      select: { id: true, email: true, name: true, role: true, defaultCurrency: true, defaultRateSource: true, createdAt: true },
     });
   }
 
   async updateMe(userId: string, dto: UpdateMeDto) {
-    await this.prisma.user.update({ where: { id: userId }, data: { defaultCurrency: dto.defaultCurrency, defaultRateSource: dto.defaultRateSource } });
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { defaultCurrency: dto.defaultCurrency, defaultRateSource: dto.defaultRateSource, name: dto.name?.trim() },
+    });
     return this.me(userId);
   }
 
@@ -91,7 +97,7 @@ export class AuthService {
     return this.issueTokens(user.id, user.email);
   }
 
-  private async issueTokens(userId: string, email: string) {
+  async issueTokens(userId: string, email: string) {
     const accessToken = await this.jwt.signAsync(
       { sub: userId, email },
       {

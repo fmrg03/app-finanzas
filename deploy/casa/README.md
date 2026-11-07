@@ -81,6 +81,16 @@ Opcional:
 - **Después de un corte de luz:** en la BIOS, la opción *Restore on AC power loss* (o similar) enciende la PC sola cuando vuelve la luz.
 - **Arranque sin escribir la contraseña:** Docker Desktop arranca al **iniciar sesión** en Windows. Para que arranque solo, puedes activar el inicio de sesión automático con `netplwiz`. Cualquiera con acceso físico a la PC entraría sin contraseña; decide tú.
 
+## 6. Tu familia
+
+Cada familiar lleva sus finanzas por separado, con su propia cuenta.
+
+1. **Invítalo desde la app.** En **Ajustes → Familia** escribe su nombre, pulsa **Invitar** y mándale el enlace por WhatsApp. Sirve una sola vez y vence en 48 horas.
+2. **Dale acceso a tu PC por Tailscale.** En la consola de Tailscale, en **Machines**, abre tu PC, elige **Share** y escribe su correo. Tu familiar instala Tailscale en su teléfono con su propia cuenta y acepta la invitación. Solo puede entrar a tu PC, no al resto de tu red.
+3. **Tu familiar abre el enlace y crea su cuenta.** Queda vinculado contigo en **Deudas → Personas**: cuando pagues una compra que comparten (una cena, una compra en Cashea), a esa persona le aparece en su cuenta con su parte y su deuda contigo. Los abonos se ven en las dos cuentas.
+
+Desde **Ajustes → Familia** también puedes enviarle un enlace para una contraseña nueva o desactivar su cuenta.
+
 ---
 
 ## Uso diario

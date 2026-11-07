@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, CreditCard, MessageCircle, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { Check, CreditCard, Link2, MessageCircle, Pencil, Plus, Trash2, Users } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Progress } from '@/components/progress';
 import { SharePanel, useTodayBcv } from '@/components/share-panel';
@@ -9,7 +9,7 @@ import { Button, ErrorNote, Field, Input, Segmented, Select } from '@/components
 import { Dialog } from '@/components/ui/dialog';
 import { api } from '@/lib/api';
 import { cn, money, today } from '@/lib/format';
-import { useApiMutation, useDebts, useInstallmentPlans, usePeople } from '@/lib/planning';
+import { useApiMutation, useDebts, useInstallmentPlans, useMembers, usePeople } from '@/lib/planning';
 import { useAccounts } from '@/lib/queries';
 import { balances, debtReminderText, personReminderText, planText, shareWhatsApp } from '@/lib/share';
 import type { Account, Currency, Debt, DebtDirection, Installment, InstallmentPlan, Person } from '@/lib/types';
@@ -119,6 +119,7 @@ function DebtCard({ d, onEdit }: { d: Debt; onEdit: () => void }) {
   const [accountId, setAccountId] = useState('');
   const pay = useApiMutation((b: { amount: string; accountId?: string }) => api(`/debts/${d.id}/payments`, { method: 'POST', json: b }));
   const unpay = useApiMutation((pid: string) => api(`/debts/${d.id}/payments/${pid}`, { method: 'DELETE' }));
+  const setAccount = useApiMutation((b: { pid: string; accountId: string }) => api(`/debts/${d.id}/payments/${b.pid}`, { method: 'PATCH', json: { accountId: b.accountId } }));
   const pct = (Number(d.paid) / Number(d.amount)) * 100;
   const theyOwe = d.direction === 'OWED_TO_ME';
 
@@ -136,6 +137,11 @@ function DebtCard({ d, onEdit }: { d: Debt; onEdit: () => void }) {
         {d.description}
         {d.dueDate && <span className={cn(d.overdue && 'font-semibold text-expense')}>{d.description ? '. ' : ''}{d.overdue ? 'Venció' : 'Vence'} el {dmy(d.dueDate)}</span>}
       </p>
+      {d.synced && (
+        <p className="mt-1 flex items-center gap-1 text-xs text-accent">
+          <Link2 size={12} /> {d.sharedBy ? `La registró ${d.sharedBy}` : `${d.person} también la ve en su cuenta`}: los abonos aparecen en las dos cuentas
+        </p>
+      )}
       <Progress className="mt-2" pct={pct} tone={d.settledAt ? 'income' : 'accent'} label={`Abonado ${Math.round(pct)} %`} />
       {!d.settledAt && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -169,14 +175,27 @@ function DebtCard({ d, onEdit }: { d: Debt; onEdit: () => void }) {
       {!!d.payments.length && (
         <ul className="mt-3 divide-y divide-line text-sm">
           {d.payments.map((p) => (
-            <li key={p.id} className="flex items-center gap-2 py-1.5 tabular-nums">
+            <li key={p.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-1.5 tabular-nums">
               <span className="text-muted">{dmy(p.date)}</span>
-              <span className="flex-1 truncate text-muted">
+              <span className="min-w-0 flex-1 truncate text-muted">
                 {p.account ? `${theyOwe ? 'a' : 'de'} ${p.account.name}${p.accountAmount ? ` (${money(p.accountAmount, p.account.currency)})` : ''}` : ''}
+                {p.mirrorOfId ? ` registrado por ${d.person}` : ''}
                 {p.note ? ` ${p.note}` : ''}
               </span>
               <span className="font-semibold">{money(p.amount, d.currency)}</span>
               <button onClick={() => unpay.mutate(p.id)} className="text-xs text-muted hover:text-expense">Borrar</button>
+              {/* Un abono que registró el familiar no tiene cuenta de este lado: se elige aquí */}
+              {!p.account && p.mirrorOfId && (
+                <Select
+                  aria-label={theyOwe ? '¿A qué cuenta entró?' : '¿De qué cuenta salió?'}
+                  value=""
+                  onChange={(e) => e.target.value && setAccount.mutate({ pid: p.id, accountId: e.target.value })}
+                  className="h-8 w-full text-xs"
+                >
+                  <option value="">{theyOwe ? '¿A qué cuenta entró? (opcional)' : '¿De qué cuenta salió? (opcional)'}</option>
+                  {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </Select>
+              )}
             </li>
           ))}
         </ul>
@@ -284,6 +303,7 @@ function PlanCard({ p }: { p: InstallmentPlan }) {
           <p className="text-sm text-muted">
             {p.provider}{p.store ? `, ${p.store}` : ''}. Compra del {dmy(p.purchaseDate)}
             {p.shared && (p.shared.paidBy ? `. Compró ${p.shared.paidBy.name}; tu parte ${pctLabel(p.myPct)}` : `. Compartida; tu parte ${pctLabel(p.myPct)}`)}
+            {p.shared?.mirrorOf && `. Te la compartió ${p.shared.mirrorOf.user.name ?? p.shared.paidBy?.name}`}
           </p>
         </div>
         <div className="text-right">
@@ -333,14 +353,16 @@ function PlanCard({ p }: { p: InstallmentPlan }) {
             <MessageCircle size={14} /> Compartir detalle
           </button>
         )}
-        <button
-          onClick={async () => {
-            if (confirm('¿Eliminar la compra? Se borran la inicial, las cuotas pagadas y las deudas del reparto.')) await del.mutateAsync(undefined);
-          }}
-          className="inline-flex items-center gap-1 text-sm text-muted hover:text-expense"
-        >
-          <Trash2 size={14} /> Eliminar compra
-        </button>
+        {!p.shared?.mirrorOf && (
+          <button
+            onClick={async () => {
+              if (confirm('¿Eliminar la compra? Se borran la inicial, las cuotas pagadas y las deudas del reparto, también en la cuenta de tus familiares.')) await del.mutateAsync(undefined);
+            }}
+            className="inline-flex items-center gap-1 text-sm text-muted hover:text-expense"
+          >
+            <Trash2 size={14} /> Eliminar compra
+          </button>
+        )}
       </div>
       {del.error && <div className="mt-2"><ErrorNote>{del.error.message}</ErrorNote></div>}
       {showShare && p.shared && (
@@ -422,7 +444,10 @@ function PeopleTab() {
             return (
               <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
                 <div className="min-w-0 flex-1">
-                  <p className="truncate font-semibold">{p.name}</p>
+                  <p className="flex items-center gap-1.5 truncate font-semibold">
+                    {p.name}
+                    {p.linkedUser && <span className="inline-flex items-center gap-1 rounded-full bg-accent-soft px-2 py-0.5 text-xs font-semibold text-accent"><Link2 size={12} /> usa la app</span>}
+                  </p>
                   <p className="text-xs text-muted">{p.phone ? `+${p.phone}` : 'Sin WhatsApp'}</p>
                 </div>
                 <div className="text-right text-sm tabular-nums">
@@ -453,12 +478,18 @@ function PeopleTab() {
 
 function PersonForm({ person, onDone }: { person?: Person; onDone: () => void }) {
   const [error, setError] = useState<string | null>(null);
+  const { data: members = [] } = useMembers();
+  const others = members.filter((m) => !m.me && !m.disabledAt);
   const save = useApiMutation((b: object) => (person ? api(`/people/${person.id}`, { method: 'PATCH', json: b }) : api('/people', { method: 'POST', json: b })));
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     try {
-      await save.mutateAsync({ name: String(fd.get('name')).trim(), phone: String(fd.get('phone')).trim() || null });
+      await save.mutateAsync({
+        name: String(fd.get('name')).trim(),
+        phone: String(fd.get('phone')).trim() || null,
+        ...(others.length ? { linkedUserId: String(fd.get('linkedUserId')) || null } : {}),
+      });
       onDone();
     } catch (err) {
       setError((err as Error).message);
@@ -470,6 +501,14 @@ function PersonForm({ person, onDone }: { person?: Person; onDone: () => void })
       <Field label="WhatsApp (opcional)" hint="Con código de país, o un número venezolano como 0412 123 4567">
         <Input name="phone" inputMode="tel" defaultValue={person?.phone ? `+${person.phone}` : ''} placeholder="+58 412 123 4567" />
       </Field>
+      {!!others.length && (
+        <Field label="¿Usa la app?" hint="Si es un familiar con cuenta, lo que pagues y compartas con esta persona le aparecerá en su cuenta">
+          <Select name="linkedUserId" defaultValue={person?.linkedUserId ?? ''}>
+            <option value="">No</option>
+            {others.map((m) => <option key={m.id} value={m.id}>Sí, es {m.displayName} ({m.email})</option>)}
+          </Select>
+        </Field>
+      )}
       {error && <ErrorNote>{error}</ErrorNote>}
       <Button type="submit" className="self-end" disabled={save.isPending}>{person ? 'Guardar' : 'Agregar'}</Button>
     </form>

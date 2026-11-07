@@ -1,4 +1,5 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { deleteMirrorsOf } from '../shared/mirror-cleanup';
 import { Prisma, RateSource, TransactionSource } from '@prisma/client';
 import { convertAmounts } from '../common/money.util';
 import { parseDateOnly, toDateOnly } from '../common/date.util';
@@ -13,6 +14,7 @@ const INCLUDE = {
   shared: {
     select: {
       id: true, splitMode: true, totalUsd: true,
+      mirrorOf: { select: { user: { select: { id: true, name: true, email: true } } } },
       paidBy: { select: { id: true, name: true, phone: true } },
       participants: { select: { personId: true, pct: true, amountUsd: true, person: { select: { id: true, name: true, phone: true } } } },
     },
@@ -147,6 +149,7 @@ export class TransactionsService {
     const moneyChanged = MONEY_FIELDS.some((k) => dto[k] !== undefined);
     const structural = moneyChanged || dto.accountId !== undefined || (dto.type !== undefined && dto.type !== current.type);
     if (structural && current.sharedId) {
+      await this.assertNotMirror(current.sharedId, 'cambiar montos o fecha');
       throw new ConflictException('Es un movimiento compartido: cambia montos, cuenta o fecha desde su reparto.');
     }
     if (structural && current.installmentPlanId && !current.installment) {
@@ -209,15 +212,30 @@ export class TransactionsService {
       throw new ConflictException('Esta cuota la registra sola la compra en cuotas (la pagó otra persona).');
     }
     if (tx.sharedId) {
-      // Borrar un compartido borra también las deudas que generó, salvo que ya tengan abonos
+      await this.assertNotMirror(tx.sharedId, 'borrarla');
+      // Borrar un compartido borra también las deudas que generó y las copias de los familiares, salvo que ya tengan abonos
       await this.assertNoPayments(tx.sharedId);
-      await this.prisma.$transaction([
-        this.prisma.transaction.delete({ where: { id } }),
-        this.prisma.sharedExpense.delete({ where: { id: tx.sharedId } }),
-      ]);
+      const sharedId = tx.sharedId;
+      await this.prisma.$transaction(async (db) => {
+        await deleteMirrorsOf(db, sharedId);
+        await db.transaction.delete({ where: { id } });
+        await db.sharedExpense.delete({ where: { id: sharedId } });
+      });
       return;
     }
     await this.prisma.transaction.delete({ where: { id } });
+  }
+
+  /** Una copia de un reparto que registró otro familiar no se cambia ni se borra desde aquí. */
+  async assertNotMirror(sharedId: string, action: string) {
+    const s = await this.prisma.sharedExpense.findUnique({
+      where: { id: sharedId },
+      select: { mirrorOf: { select: { user: { select: { name: true, email: true } } } } },
+    });
+    if (s?.mirrorOf) {
+      const who = s.mirrorOf.user.name?.trim() || s.mirrorOf.user.email.split('@')[0];
+      throw new ConflictException(`Esta compra la registró ${who}. Para ${action}, pídele a ${who} que lo haga desde su cuenta.`);
+    }
   }
 
   /** Un reparto con abonos ya registrados no se puede rehacer ni borrar sin perder esos abonos. */

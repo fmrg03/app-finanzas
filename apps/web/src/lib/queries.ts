@@ -93,6 +93,8 @@ export function useDeleteTransaction() {
 export interface Me {
   id: string;
   email: string;
+  name: string | null;
+  role: 'ADMIN' | 'MEMBER';
   defaultCurrency: Currency;
   defaultRateSource: RateSource;
 }

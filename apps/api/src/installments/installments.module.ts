@@ -14,6 +14,8 @@ import { CronJob } from 'cron';
 import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
 import { APP_TIMEZONE, parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
 import { PrismaService } from '../prisma/prisma.service';
+import { deleteMirrorsOf } from '../shared/mirror-cleanup';
+import { MirrorService } from '../shared/mirror.service';
 import { SharedModule, SharedService, SplitDto } from '../shared/shared.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { myShare, TransactionsService } from '../transactions/transactions.service';
@@ -104,6 +106,7 @@ const PLAN_INCLUDE = {
   shared: {
     select: {
       id: true, splitMode: true, totalUsd: true, paidByPersonId: true,
+      mirrorOf: { select: { user: { select: { id: true, name: true, email: true } } } },
       paidBy: { select: { id: true, name: true, phone: true } },
       participants: { select: { personId: true, pct: true, amountUsd: true, person: { select: { id: true, name: true, phone: true } } } },
       debts: { select: { id: true, personId: true, direction: true, amount: true, settledAt: true, payments: { select: { amount: true } } } },
@@ -142,6 +145,7 @@ export class InstallmentsService implements OnApplicationBootstrap {
     private prisma: PrismaService,
     private transactions: TransactionsService,
     private shared: SharedService,
+    private mirrors: MirrorService,
     private config: ConfigService,
     private scheduler: SchedulerRegistry,
   ) {}
@@ -183,6 +187,7 @@ export class InstallmentsService implements OnApplicationBootstrap {
   }
 
   async create(userId: string, dto: CreatePlanDto) {
+    await this.mirrors.assertPayerNotLinked(userId, dto.split?.paidByPersonId);
     const paidByMe = dto.split?.paidByPersonId == null;
     if (paidByMe && !dto.accountId) throw new BadRequestException('Indica con qué cuenta pagaste la inicial');
     if (paidByMe) await this.transactions.assertAccount(userId, dto.accountId!);
@@ -210,7 +215,7 @@ export class InstallmentsService implements OnApplicationBootstrap {
     const amounts = splitInstallments(totalUsd.sub(down), dto.count);
     const label = `${dto.provider.trim()}: ${dto.description.trim()}`;
 
-    const planId = await this.prisma.$transaction(async (db) => {
+    const created = await this.prisma.$transaction(async (db) => {
       let sharedId: string | undefined;
       let sharePct: Prisma.Decimal | null = null;
       if (dto.split) {
@@ -242,10 +247,12 @@ export class InstallmentsService implements OnApplicationBootstrap {
           db,
         );
       }
-      return plan.id;
+      return { planId: plan.id, sharedId };
     });
-    await this.processDueSafe(userId);
-    return this.findOne(userId, planId);
+    // A los familiares vinculados les aparece la compra con su parte; sus cuotas vencidas se registran ya
+    if (created.sharedId && (await this.mirrors.sync(created.sharedId))) await this.processDueSafe();
+    else await this.processDueSafe(userId);
+    return this.findOne(userId, created.planId);
   }
 
   async update(userId: string, id: string, dto: UpdatePlanDto) {
@@ -265,8 +272,12 @@ export class InstallmentsService implements OnApplicationBootstrap {
   /** Borra la compra, su inicial, sus cuotas pagadas y las deudas del reparto. */
   async remove(userId: string, id: string) {
     const plan = await this.own(userId, id);
-    if (plan.sharedId) await this.transactions.assertNoPayments(plan.sharedId);
+    if (plan.sharedId) {
+      await this.mirrors.assertNotMirror(plan.sharedId, 'borrarla');
+      await this.transactions.assertNoPayments(plan.sharedId);
+    }
     await this.prisma.$transaction(async (db) => {
+      if (plan.sharedId) await deleteMirrorsOf(db, plan.sharedId);
       await db.installmentPlan.delete({ where: { id } });
       if (plan.sharedId) await db.sharedExpense.delete({ where: { id: plan.sharedId } });
     });
