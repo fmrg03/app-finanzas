@@ -10,7 +10,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { api } from '@/lib/api';
 import { cn, money, today } from '@/lib/format';
 import { useApiMutation, useDebts, useInstallmentPlans, useMembers, usePeople } from '@/lib/planning';
-import { useAccounts } from '@/lib/queries';
+import { useAccounts, useCategories } from '@/lib/queries';
 import { balances, debtReminderText, personReminderText, planText, shareWhatsApp } from '@/lib/share';
 import type { Account, Currency, Debt, DebtDirection, Installment, InstallmentPlan, Person } from '@/lib/types';
 
@@ -116,12 +116,20 @@ function DebtCard({ d, onEdit }: { d: Debt; onEdit: () => void }) {
   const { data: accounts = [] } = useAccounts();
   const rate = useTodayBcv();
   const [amount, setAmount] = useState('');
+  const { data: categories = [] } = useCategories();
   const [accountId, setAccountId] = useState('');
-  const pay = useApiMutation((b: { amount: string; accountId?: string }) => api(`/debts/${d.id}/payments`, { method: 'POST', json: b }));
+  const [date, setDate] = useState(today());
+  // En deudas propias el abono también es gasto (pagas) o ingreso (te pagan); en compartidas ya se contó al comprar
+  const [asTx, setAsTx] = useState(!d.fromShared);
+  const [categoryId, setCategoryId] = useState('');
+  const pay = useApiMutation((b: object) => api(`/debts/${d.id}/payments`, { method: 'POST', json: b }));
   const unpay = useApiMutation((pid: string) => api(`/debts/${d.id}/payments/${pid}`, { method: 'DELETE' }));
   const setAccount = useApiMutation((b: { pid: string; accountId: string }) => api(`/debts/${d.id}/payments/${b.pid}`, { method: 'PATCH', json: { accountId: b.accountId } }));
   const pct = (Number(d.paid) / Number(d.amount)) * 100;
   const theyOwe = d.direction === 'OWED_TO_ME';
+  const txType = theyOwe ? 'INCOME' : 'EXPENSE';
+  const cats = categories.filter((c) => c.type === txType);
+  const needsAccount = asTx && !accountId;
 
   return (
     <li className="rounded-2xl bg-surface p-4">
@@ -144,20 +152,48 @@ function DebtCard({ d, onEdit }: { d: Debt; onEdit: () => void }) {
       )}
       <Progress className="mt-2" pct={pct} tone={d.settledAt ? 'income' : 'accent'} label={`Abonado ${Math.round(pct)} %`} />
       {!d.settledAt && (
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <label className="sr-only" htmlFor={`d-${d.id}`}>Monto del abono</label>
-          <Input id={`d-${d.id}`} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={d.currency === 'USD' ? 'USD' : 'Bs'} className="h-9 w-28 flex-1 tabular-nums" />
-          <Select aria-label={theyOwe ? 'Cuenta donde entra' : 'Cuenta de donde sale'} value={accountId} onChange={(e) => setAccountId(e.target.value)} className="h-9 w-40 flex-1">
-            <option value="">{theyOwe ? 'No entra a una cuenta' : 'No sale de una cuenta'}</option>
-            {accounts.map((a) => <option key={a.id} value={a.id}>{theyOwe ? 'Entra a ' : 'Sale de '}{a.name}</option>)}
-          </Select>
-          <Button
-            className="h-9"
-            disabled={pay.isPending || !(Number(toApi(amount)) > 0)}
-            onClick={async () => { await pay.mutateAsync({ amount: toApi(amount), ...(accountId ? { accountId } : {}) }); setAmount(''); }}
-          >
-            {theyOwe ? 'Registrar pago' : 'Abonar'}
-          </Button>
+        <div className="mt-3 flex flex-col gap-2 rounded-xl bg-canvas p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="sr-only" htmlFor={`d-${d.id}`}>Monto del abono</label>
+            <Input id={`d-${d.id}`} inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder={`Monto (${d.currency === 'USD' ? 'USD' : 'Bs'})`} className="h-9 w-28 flex-1 tabular-nums" />
+            <Input type="date" aria-label="Fecha del pago" value={date} max={today()} onChange={(e) => setDate(e.target.value)} className="h-9 w-40" />
+            <Select aria-label={theyOwe ? 'Cuenta donde entra' : 'Cuenta de donde sale'} value={accountId} onChange={(e) => setAccountId(e.target.value)} className="h-9 w-44 flex-1">
+              <option value="">{theyOwe ? 'No entra a una cuenta' : 'No sale de una cuenta'}</option>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{theyOwe ? 'Entra a ' : 'Sale de '}{a.name}</option>)}
+            </Select>
+          </div>
+          {d.fromShared ? (
+            <p className="text-xs text-muted">Tu parte de esta compra ya contó como gasto el día de la compra: el abono solo mueve el saldo de la cuenta.</p>
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={asTx} onChange={(e) => setAsTx(e.target.checked)} className="size-4 accent-[var(--color-accent)]" />
+                {theyOwe ? 'Registrar como ingreso' : 'Registrar como gasto'}
+              </label>
+              {asTx && (
+                <Select aria-label="Categoría" value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="h-8 w-48 flex-1 text-sm">
+                  <option value="">Sin categoría</option>
+                  {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </Select>
+              )}
+            </div>
+          )}
+          <div className="flex items-center justify-end gap-3">
+            {needsAccount && <span className="text-xs text-muted">Elige la cuenta para registrarlo en Movimientos</span>}
+            <Button
+              className="h-9"
+              disabled={pay.isPending || !(Number(toApi(amount)) > 0) || needsAccount}
+              onClick={async () => {
+                await pay.mutateAsync({
+                  amount: toApi(amount), date, ...(accountId ? { accountId } : {}),
+                  ...(asTx && !d.fromShared ? { asTransaction: true, categoryId: categoryId || null } : {}),
+                });
+                setAmount('');
+              }}
+            >
+              {theyOwe ? 'Registrar pago' : 'Abonar'}
+            </Button>
+          </div>
         </div>
       )}
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -180,10 +216,16 @@ function DebtCard({ d, onEdit }: { d: Debt; onEdit: () => void }) {
               <span className="min-w-0 flex-1 truncate text-muted">
                 {p.account ? `${theyOwe ? 'a' : 'de'} ${p.account.name}${p.accountAmount ? ` (${money(p.accountAmount, p.account.currency)})` : ''}` : ''}
                 {p.mirrorOfId ? ` registrado por ${d.person}` : ''}
+                {p.transaction ? `, ${p.transaction.type === 'EXPENSE' ? 'gasto' : 'ingreso'}${p.transaction.category ? ` en ${p.transaction.category.name}` : ''}` : ''}
                 {p.note ? ` ${p.note}` : ''}
               </span>
               <span className="font-semibold">{money(p.amount, d.currency)}</span>
-              <button onClick={() => unpay.mutate(p.id)} className="text-xs text-muted hover:text-expense">Borrar</button>
+              <button
+                onClick={() => (!p.transaction || confirm('¿Borrar el abono? También se borra su ' + (p.transaction.type === 'EXPENSE' ? 'gasto' : 'ingreso') + ' en Movimientos.')) && unpay.mutate(p.id)}
+                className="text-xs text-muted hover:text-expense"
+              >
+                Borrar
+              </button>
               {/* Un abono que registró el familiar no tiene cuenta de este lado: se elige aquí */}
               {!p.account && p.mirrorOfId && (
                 <Select
@@ -242,7 +284,7 @@ function DebtForm({ debt, direction, onDone }: { debt?: Debt; direction: DebtDir
       <Field label="Vence (opcional)"><Input type="date" name="dueDate" defaultValue={debt?.dueDate ?? ''} /></Field>
       {error && <ErrorNote>{error}</ErrorNote>}
       <div className="flex items-center gap-2">
-        {debt && !fixed && <Button type="button" variant="danger" onClick={async () => { if (confirm('¿Eliminar la deuda y sus abonos?')) { await del.mutateAsync(undefined); onDone(); } }}>Eliminar</Button>}
+        {debt && !fixed && <Button type="button" variant="danger" onClick={async () => { if (confirm('¿Eliminar la deuda y sus abonos? También se borran los gastos o ingresos que generaron.')) { await del.mutateAsync(undefined); onDone(); } }}>Eliminar</Button>}
         <Button type="submit" className="ml-auto" disabled={save.isPending}>{debt ? 'Guardar' : 'Crear'}</Button>
       </div>
     </form>

@@ -1,6 +1,6 @@
 'use client';
 
-import { Camera, CheckCircle2, CreditCard, FileText, Loader2, Users } from 'lucide-react';
+import { Camera, CheckCircle2, CreditCard, FileText, HandCoins, Loader2, Users } from 'lucide-react';
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { InstallmentEditor, emptyInstallments, installmentPreview, type InstallmentState } from '@/components/installment-editor';
@@ -74,7 +74,7 @@ export function TransactionForm({
   const [receipt, setReceipt] = useState<ReceiptRead | null>(null);
   const isShared = !!tx?.shared;
   // Inicial de una compra en cuotas, o cuota que se registró sola: los montos los define la compra
-  const locked = (!!tx?.installmentPlanId && (!tx.installment || !tx.accountId)) || !!tx?.shared?.mirrorOf;
+  const locked = (!!tx?.installmentPlanId && (!tx.installment || !tx.accountId)) || !!tx?.shared?.mirrorOf || !!tx?.debtPayment;
   const [sharedOn, setSharedOn] = useState(isShared || startWith === 'shared');
   const [split, setSplit] = useState<SplitState>(() =>
     tx?.shared ? splitFromShared(tx.shared, Number(tx.originalAmount), Number(tx.amountUsd)) : emptySplit(),
@@ -224,7 +224,9 @@ export function TransactionForm({
   }
 
   async function onDelete() {
-    const msg = tx?.installment
+    const msg = tx?.debtPayment
+      ? '¿Eliminar este movimiento? También se deshace el abono de la deuda.'
+      : tx?.installment
       ? '¿Deshacer el pago de esta cuota? Vuelve a quedar pendiente.'
       : isShared
         ? '¿Eliminar este movimiento compartido? También se borran las deudas que generó.'
@@ -261,6 +263,15 @@ export function TransactionForm({
             <strong>{tx.installment ? `Cuota ${tx.installment.n} de ${tx.installmentPlan.count}` : 'Inicial'}</strong> de {tx.installmentPlan.provider}: {tx.installmentPlan.description}.{' '}
             {locked ? 'Los montos los define la compra; aquí puedes cambiar categoría, descripción y etiquetas.' : 'Si la eliminas, la cuota vuelve a quedar pendiente.'}{' '}
             <Link href="/deudas?tab=cuotas" className="font-semibold text-accent hover:underline">Ver la compra</Link>
+          </p>
+        </div>
+      )}
+      {tx?.debtPayment && (
+        <div className="flex items-start gap-2 rounded-xl bg-accent-soft p-3 text-sm">
+          <HandCoins size={18} className="mt-0.5 shrink-0 text-accent" />
+          <p>
+            Es el abono {tx.debtPayment.debt.direction === 'I_OWE' ? 'a' : 'de'} <strong>{tx.debtPayment.debt.person}</strong>. Aquí puedes cambiar categoría, descripción y etiquetas;
+            si lo eliminas, también se deshace el abono en <Link href="/deudas" className="font-semibold text-accent hover:underline">Deudas</Link>.
           </p>
         </div>
       )}
@@ -395,7 +406,7 @@ export function TransactionForm({
       {error && <ErrorNote>{error}</ErrorNote>}
 
       <div className="flex items-center gap-2">
-        {tx && !locked && (
+        {tx && (!locked || tx.debtPayment) && (
           <Button type="button" variant="danger" onClick={onDelete} disabled={del.isPending}>{tx.installment ? 'Deshacer pago' : 'Eliminar'}</Button>
         )}
         <Button type="submit" disabled={save.isPending || busy} className="ml-auto">

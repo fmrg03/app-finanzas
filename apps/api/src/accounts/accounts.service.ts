@@ -23,7 +23,8 @@ export class AccountsService {
       this.prisma.transfer.groupBy({ by: ['fromAccountId'], where: { userId }, _sum: { fromAmount: true } }),
       this.prisma.transfer.groupBy({ by: ['toAccountId'], where: { userId }, _sum: { toAmount: true } }),
       this.prisma.debtPayment.findMany({
-        where: { accountId: { not: null }, debt: { userId } },
+        // Si el abono generó un gasto o ingreso, ese movimiento ya mueve el saldo
+        where: { accountId: { not: null }, transactionId: null, debt: { userId } },
         select: { accountId: true, amount: true, accountAmount: true, debt: { select: { direction: true } } },
       }),
     ]);

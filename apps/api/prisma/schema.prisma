@@ -232,6 +232,7 @@ model Transaction {
   shared          SharedExpense?   @relation(fields: [sharedId], references: [id], onDelete: SetNull)
   installmentPlan InstallmentPlan? @relation(fields: [installmentPlanId], references: [id], onDelete: Cascade)
   installment     Installment?
+  debtPayment     DebtPayment?
 
   @@unique([userId, source, externalId])
   @@index([userId, date])
@@ -401,12 +402,15 @@ model DebtPayment {
   accountAmount Decimal? @db.Decimal(18, 2)
   // Copia del abono que registró el familiar en su lado de la deuda
   mirrorOfId    String?  @unique
+  // Movimiento (gasto o ingreso) creado con este abono; si existe, él mueve el saldo de la cuenta
+  transactionId String?  @unique
   createdAt     DateTime @default(now())
 
   debt     Debt         @relation(fields: [debtId], references: [id], onDelete: Cascade)
   account  Account?     @relation(fields: [accountId], references: [id], onDelete: Restrict)
   mirrorOf DebtPayment? @relation("PaymentMirror", fields: [mirrorOfId], references: [id], onDelete: Cascade)
   mirror   DebtPayment? @relation("PaymentMirror")
+  transaction Transaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
 
   @@index([debtId])
 }

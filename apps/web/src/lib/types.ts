@@ -52,6 +52,8 @@ export interface Transaction {
   installmentPlanId: string | null;
   installmentPlan: { id: string; provider: string; description: string; count: number } | null;
   installment: { id: string; n: number } | null;
+  /** Gasto o ingreso creado al abonar una deuda */
+  debtPayment: { id: string; debtId: string; debt: { person: string; direction: DebtDirection } } | null;
 }
 
 export type SplitMode = 'EQUAL' | 'PERCENT' | 'AMOUNT';
@@ -266,6 +268,8 @@ export interface Debt {
   payments: {
     id: string; date: string; amount: string; note: string | null; accountAmount: string | null; mirrorOfId: string | null;
     account: { id: string; name: string; currency: Currency } | null;
+    transactionId: string | null;
+    transaction: { id: string; type: TxType; category: { id: string; name: string } | null } | null;
   }[];
   paid: string;
   remaining: string;
@@ -278,6 +282,16 @@ export interface Debt {
   synced: boolean;
   /** Nombre del familiar que registró la compra, si es una copia */
   sharedBy: string | null;
+}
+
+/** Abono con cuenta que no es gasto ni ingreso: se muestra en Movimientos como las transferencias */
+export interface DebtPaymentItem {
+  id: string;
+  date: string;
+  amount: string;
+  accountAmount: string | null;
+  account: { id: string; name: string; currency: Currency };
+  debt: { id: string; person: string; direction: DebtDirection; description: string | null; currency: Currency };
 }
 
 export interface Member {

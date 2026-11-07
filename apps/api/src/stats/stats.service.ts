@@ -128,7 +128,7 @@ export class StatsService {
       this.prisma.transfer.findMany({ where: { userId, date: { lte: today } }, select: { fromAccountId: true, toAccountId: true, date: true, fromAmount: true, toAmount: true } }),
       this.prisma.exchangeRate.findMany({ where: { source: 'BCV', date: { lte: today } }, orderBy: { date: 'asc' }, select: { date: true, rate: true } }),
       this.prisma.debtPayment.findMany({
-        where: { accountId: { not: null }, debt: { userId }, date: { lte: today } },
+        where: { accountId: { not: null }, transactionId: null, debt: { userId }, date: { lte: today } },
         select: { accountId: true, date: true, amount: true, accountAmount: true, debt: { select: { direction: true } } },
       }),
       // Cuotas que te tocan pagar a ti (compras tuyas, compartidas o no)

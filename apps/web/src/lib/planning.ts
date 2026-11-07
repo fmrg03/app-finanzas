@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import type { BudgetStatus, Debt, Goal, InstallmentPlan, Member, NetWorth, PendingInvitation, Person, Recurring, Transfer, UpcomingInstallments } from './types';
+import type { BudgetStatus, Debt, DebtPaymentItem, Goal, InstallmentPlan, Member, NetWorth, PendingInvitation, Person, Recurring, Transfer, UpcomingInstallments } from './types';
 
 /** Todo lo que cambia saldos o totales: se refresca junto. */
 function useInvalidateAll() {
@@ -46,3 +46,5 @@ export const useUpcomingInstallments = (days = 30) =>
 export const useMembers = () => useQuery({ queryKey: ['family', 'members'], queryFn: () => api<Member[]>('/family/members') });
 export const usePendingInvitations = (enabled: boolean) =>
   useQuery({ queryKey: ['family', 'invitations'], queryFn: () => api<PendingInvitation[]>('/family/invitations'), enabled });
+export const useDebtPayments = (from?: string, to?: string) =>
+  useQuery({ queryKey: ['debts', 'payments', from, to], queryFn: () => api<DebtPaymentItem[]>(`/debts/payments?from=${from ?? ''}&to=${to ?? ''}`) });

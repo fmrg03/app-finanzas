@@ -1,6 +1,7 @@
 'use client';
 
-import { ArrowRight, CreditCard, Download, Plus, Search, Users } from 'lucide-react';
+import { ArrowRight, CreditCard, Download, HandCoins, Plus, Search, Users } from 'lucide-react';
+import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { AmountPair } from '@/components/amount';
 import { DueRecurring } from '@/components/due-recurring';
@@ -11,12 +12,15 @@ import { Button, ErrorNote, Input, Select } from '@/components/ui/controls';
 import { Dialog } from '@/components/ui/dialog';
 import { downloadFile } from '@/lib/api';
 import { cn, dayLabel, money, monthLabel, monthRange, rate, signedPct } from '@/lib/format';
-import { useTransfers } from '@/lib/planning';
+import { useDebtPayments, useTransfers } from '@/lib/planning';
 import { txParams, useAccounts, useCategories, useTransactions } from '@/lib/queries';
-import type { Transaction, Transfer, TxType } from '@/lib/types';
+import type { DebtPaymentItem, Transaction, Transfer, TxType } from '@/lib/types';
 
 type Editing = { kind: 'tx'; tx?: Transaction; type?: TxType } | { kind: 'transfer'; transfer?: Transfer } | null;
-type Row = { kind: 'tx'; date: string; tx: Transaction } | { kind: 'transfer'; date: string; t: Transfer };
+type Row =
+  | { kind: 'tx'; date: string; tx: Transaction }
+  | { kind: 'transfer'; date: string; t: Transfer }
+  | { kind: 'payment'; date: string; p: DebtPaymentItem };
 
 export default function MovimientosPage() {
   const nav = useMonth();
@@ -40,6 +44,7 @@ export default function MovimientosPage() {
   const filters = { from, to, type: type === 'TRANSFER' || !type ? undefined : type, accountId, categoryId, q: q.trim() || undefined };
   const txQ = useTransactions(filters);
   const trQ = useTransfers(from, to);
+  const dpQ = useDebtPayments(from, to);
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
 
@@ -55,15 +60,25 @@ export default function MovimientosPage() {
     );
   }, [trQ.data, type, categoryId, accountId, q]);
 
+  // Abonos de deudas que solo movieron una cuenta (sin gasto ni ingreso): se muestran como las transferencias
+  const payments = useMemo(() => {
+    if (type === 'INCOME' || type === 'EXPENSE' || categoryId) return [];
+    const term = q.trim().toLowerCase();
+    return (dpQ.data ?? []).filter(
+      (p) => (!accountId || p.account.id === accountId) && (!term || `${p.debt.person} ${p.debt.description ?? ''}`.toLowerCase().includes(term)),
+    );
+  }, [dpQ.data, type, categoryId, accountId, q]);
+
   const groups = useMemo(() => {
     const rows: Row[] = [
       ...(type === 'TRANSFER' ? [] : items.map((tx) => ({ kind: 'tx' as const, date: tx.date, tx }))),
       ...transfers.map((t) => ({ kind: 'transfer' as const, date: t.date, t })),
+      ...payments.map((p) => ({ kind: 'payment' as const, date: p.date, p })),
     ];
     const map = new Map<string, Row[]>();
     for (const r of rows.sort((a, b) => b.date.localeCompare(a.date))) map.set(r.date, [...(map.get(r.date) ?? []), r]);
     return [...map.entries()];
-  }, [items, transfers, type]);
+  }, [items, transfers, payments, type]);
 
   const t = first?.totals;
 
@@ -160,9 +175,13 @@ export default function MovimientosPage() {
                         </span>
                       </button>
                     </li>
-                  ) : (
+                  ) : r.kind === 'transfer' ? (
                     <li key={r.t.id}>
                       <TransferRow t={r.t} onClick={() => setEditing({ kind: 'transfer', transfer: r.t })} />
+                    </li>
+                  ) : (
+                    <li key={r.p.id}>
+                      <PaymentRow p={r.p} />
                     </li>
                   ),
                 )}
@@ -248,6 +267,26 @@ function TransferRow({ t, onClick }: { t: Transfer; onClick: () => void }) {
         </span>
       </span>
     </button>
+  );
+}
+
+function PaymentRow({ p }: { p: DebtPaymentItem }) {
+  const paid = p.debt.direction === 'I_OWE';
+  const cur = p.account.currency;
+  return (
+    <Link href="/deudas" className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-canvas/60">
+      <HandCoins size={14} className="shrink-0 text-accent" aria-hidden />
+      <span className="min-w-0 flex-1">
+        <span className="block truncate font-semibold">{paid ? `Abono a ${p.debt.person}` : `Abono de ${p.debt.person}`}</span>
+        <span className="block truncate text-xs text-muted">
+          {[p.debt.description?.replace(/ \(compartido\)$/, ''), `${paid ? 'de' : 'a'} ${p.account.name}`].filter(Boolean).join(', ')}
+        </span>
+      </span>
+      <span className="flex flex-col items-end text-right">
+        <span className="text-base font-bold tabular-nums">{paid ? '−' : '+'}{money(p.accountAmount ?? p.amount, cur)}</span>
+        <span className="text-xs text-muted">no cuenta como gasto</span>
+      </span>
+    </Link>
   );
 }
 

@@ -21,6 +21,7 @@ const INCLUDE = {
   },
   installmentPlan: { select: { id: true, provider: true, description: true, count: true } },
   installment: { select: { id: true, n: true } },
+  debtPayment: { select: { id: true, debtId: true, debt: { select: { person: true, direction: true } } } },
 } satisfies Prisma.TransactionInclude;
 
 export const TX_INCLUDE = INCLUDE;
@@ -143,11 +144,17 @@ export class TransactionsService {
    * monto, moneda, fecha, fuente de tasa o tasa; si no, queda congelado.
    */
   async update(userId: string, id: string, dto: UpdateTransactionDto) {
-    const current = await this.prisma.transaction.findFirst({ where: { id, userId }, include: { installment: { select: { id: true } } } });
+    const current = await this.prisma.transaction.findFirst({
+      where: { id, userId },
+      include: { installment: { select: { id: true } }, debtPayment: { select: { id: true } } },
+    });
     if (!current) throw new NotFoundException('Movimiento no encontrado');
 
     const moneyChanged = MONEY_FIELDS.some((k) => dto[k] !== undefined);
     const structural = moneyChanged || dto.accountId !== undefined || (dto.type !== undefined && dto.type !== current.type);
+    if (structural && current.debtPayment) {
+      throw new ConflictException('Es el abono de una deuda: para cambiar monto, fecha o cuenta, bórralo en Deudas y regístralo de nuevo.');
+    }
     if (structural && current.sharedId) {
       await this.assertNotMirror(current.sharedId, 'cambiar montos o fecha');
       throw new ConflictException('Es un movimiento compartido: cambia montos, cuenta o fecha desde su reparto.');
@@ -202,9 +209,22 @@ export class TransactionsService {
   async remove(userId: string, id: string) {
     const tx = await this.prisma.transaction.findFirst({
       where: { id, userId },
-      select: { id: true, accountId: true, sharedId: true, installmentPlanId: true, installment: { select: { id: true } } },
+      select: {
+        id: true, accountId: true, sharedId: true, installmentPlanId: true, installment: { select: { id: true } },
+        debtPayment: { select: { id: true, debtId: true, mirror: { select: { debtId: true } } } },
+      },
     });
     if (!tx) throw new NotFoundException('Movimiento no encontrado');
+    if (tx.debtPayment) {
+      // Borrar el gasto o ingreso de un abono deshace el abono (y su copia en la cuenta del familiar)
+      const p = tx.debtPayment;
+      await this.prisma.$transaction(async (db) => {
+        await db.transaction.delete({ where: { id } });
+        await db.debtPayment.delete({ where: { id: p.id } });
+        for (const debtId of [p.debtId, p.mirror?.debtId].filter((x): x is string => !!x)) await resettle(db, debtId);
+      });
+      return;
+    }
     if (tx.installmentPlanId && !tx.installment) {
       throw new ConflictException('Es la inicial de una compra en cuotas: elimina la compra completa desde Deudas → Cuotas.');
     }
@@ -351,6 +371,15 @@ export class TransactionsService {
 
   /** Formato de salida: fecha como YYYY-MM-DD y decimales como string (sin perder precisión). */
   present = <T extends { date: Date }>(tx: T) => ({ ...tx, date: toDateOnly(tx.date) });
+}
+
+/** Marca la deuda como saldada si lo abonado cubre el total, o la reabre. */
+async function resettle(db: Prisma.TransactionClient, debtId: string) {
+  const debt = await db.debt.findUnique({ where: { id: debtId } });
+  if (!debt) return;
+  const paid = (await db.debtPayment.aggregate({ where: { debtId }, _sum: { amount: true } }))._sum.amount ?? new D(0);
+  const settled = paid.gte(debt.amount);
+  if (settled !== !!debt.settledAt) await db.debt.update({ where: { id: debtId }, data: { settledAt: settled ? new Date() : null } });
 }
 
 /** Tu parte de un movimiento. Sin porcentaje es el monto completo. */

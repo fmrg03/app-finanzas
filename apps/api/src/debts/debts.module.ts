@@ -1,7 +1,7 @@
-import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, ConflictException, Controller, Delete, Get, HttpCode, Injectable, Module, NotFoundException, Param, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiProperty, ApiPropertyOptional, ApiTags, PartialType } from '@nestjs/swagger';
 import { Currency, DebtDirection, Prisma } from '@prisma/client';
-import { IsDateString, IsEnum, IsNumberString, IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
+import { IsBoolean, IsDateString, IsEnum, IsNumberString, IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
 import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
 import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
 import { convertAmounts } from '../common/money.util';
@@ -9,6 +9,8 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import { displayName, PeopleModule, PeopleService } from '../people/people.module';
 import { PrismaService } from '../prisma/prisma.service';
+import { TransactionsModule } from '../transactions/transactions.module';
+import { TransactionsService } from '../transactions/transactions.service';
 
 class CreateDebtDto {
   @ApiProperty({ enum: DebtDirection, description: 'I_OWE: yo debo; OWED_TO_ME: me deben' }) @IsEnum(DebtDirection)
@@ -51,6 +53,14 @@ class PaymentDto {
   @ApiPropertyOptional({ description: 'Tasa Bs/USD si la cuenta es de otra moneda (por defecto la BCV del día)' })
   @IsOptional() @IsNumberString()
   rate?: string;
+
+  @ApiPropertyOptional({ description: 'Registrar también como gasto (si pagas) o ingreso (si te pagan) en esa fecha y cuenta' })
+  @IsOptional() @IsBoolean()
+  asTransaction?: boolean;
+
+  @ApiPropertyOptional({ nullable: true, description: 'Categoría del gasto o ingreso' })
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString()
+  categoryId?: string | null;
 }
 
 const D = Prisma.Decimal;
@@ -69,13 +79,36 @@ class DebtsService {
     private prisma: PrismaService,
     private people: PeopleService,
     private rates: ExchangeRatesService,
+    private transactions: TransactionsService,
   ) {}
+
+  /** Abonos con cuenta que no son gasto ni ingreso, para mostrarlos en Movimientos (como las transferencias). */
+  async paymentsBetween(userId: string, from?: string, to?: string) {
+    const list = await this.prisma.debtPayment.findMany({
+      where: {
+        debt: { userId }, accountId: { not: null }, transactionId: null,
+        ...(from || to ? { date: { ...(from ? { gte: parseDateOnly(from) } : {}), ...(to ? { lte: parseDateOnly(to) } : {}) } } : {}),
+      },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+      include: {
+        account: { select: { id: true, name: true, currency: true } },
+        debt: { select: { id: true, person: true, direction: true, description: true, currency: true } },
+      },
+    });
+    return list.map((p) => ({ ...p, date: toDateOnly(p.date) }));
+  }
 
   async list(userId: string) {
     const debts = await this.prisma.debt.findMany({
       where: { userId },
       include: {
-        payments: { orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], include: { account: { select: { id: true, name: true, currency: true } } } },
+        payments: {
+          orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+          include: {
+            account: { select: { id: true, name: true, currency: true } },
+            transaction: { select: { id: true, type: true, category: { select: { id: true, name: true } } } },
+          },
+        },
         personRef: { select: { id: true, name: true, phone: true, linkedUserId: true } },
         shared: { select: { mirrorOf: { select: { user: { select: { name: true, email: true } } } } } },
       },
@@ -132,7 +165,11 @@ class DebtsService {
   async remove(userId: string, id: string) {
     const debt = await this.own(userId, id);
     if (debt.sharedId) throw new ConflictException('Esta deuda viene de un movimiento compartido: se borra al borrar el movimiento.');
-    await this.prisma.debt.delete({ where: { id } });
+    // Con la deuda se van sus abonos y los gastos o ingresos que generaron
+    await this.prisma.$transaction([
+      this.prisma.transaction.deleteMany({ where: { userId, debtPayment: { debtId: id } } }),
+      this.prisma.debt.delete({ where: { id } }),
+    ]);
   }
 
   async pay(userId: string, id: string, dto: PaymentDto) {
@@ -141,10 +178,39 @@ class DebtsService {
     const amount = positive(dto.amount);
     if (amount.gt(debt.amount.sub(paid))) throw new BadRequestException(`El abono supera lo pendiente (${debt.amount.sub(paid).toFixed(2)})`);
     const date = dto.date ?? todayLocal();
-    const accountAmount = dto.accountId ? await this.accountAmount(userId, dto.accountId, debt.currency, amount, date, dto.rate) : null;
+    if (date > todayLocal()) throw new BadRequestException('La fecha del abono no puede ser futura');
+
+    // Como movimiento: un gasto si pagas, un ingreso si te pagan. El movimiento mueve el saldo de la cuenta.
+    let tx: { input: Parameters<TransactionsService['insert']>[1]; snapshot: Awaited<ReturnType<TransactionsService['snapshot']>> } | null = null;
+    if (dto.asTransaction) {
+      if (debt.sharedId) {
+        throw new BadRequestException('Esta deuda viene de una compra compartida: tu parte ya contó como gasto el día de la compra, así que el abono no se registra otra vez.');
+      }
+      if (!dto.accountId) throw new BadRequestException('Elige la cuenta para registrar el abono como movimiento');
+      await this.transactions.assertAccount(userId, dto.accountId);
+      const type = debt.direction === 'I_OWE' ? 'EXPENSE' : 'INCOME';
+      const category = await this.transactions.assertCategory(userId, dto.categoryId ?? null, type);
+      const snapshot = await this.transactions.snapshot(userId, {
+        currency: debt.currency, amount: amount.toFixed(2), date,
+        ...(dto.rate ? { rate: dto.rate } : { rateSource: category?.defaultRateSource ?? undefined }),
+      });
+      const what = debt.description?.replace(/ \(compartido\)$/, '');
+      tx = {
+        input: {
+          accountId: dto.accountId, categoryId: dto.categoryId ?? null, type, date,
+          description: `${type === 'EXPENSE' ? 'Abono a' : 'Abono de'} ${debt.person}${what ? `: ${what}` : ''}`,
+        },
+        snapshot,
+      };
+    }
+    const accountAmount = dto.accountId && !tx ? await this.accountAmount(userId, dto.accountId, debt.currency, amount, date, dto.rate) : null;
     await this.prisma.$transaction(async (db) => {
+      const created = tx ? await this.transactions.insert(userId, tx.input, tx.snapshot, {}, db) : null;
       const payment = await db.debtPayment.create({
-        data: { debtId: id, amount, date: parseDateOnly(date), note: dto.note?.trim() || null, accountId: dto.accountId ?? null, accountAmount },
+        data: {
+          debtId: id, amount, date: parseDateOnly(date), note: dto.note?.trim() || null, accountId: dto.accountId ?? null, accountAmount,
+          transactionId: created?.id ?? null,
+        },
       });
       // Deuda compartida con un familiar: el abono aparece también en su lado, sin cuenta (la elige él)
       if (debt.linkedDebtId) {
@@ -162,6 +228,7 @@ class DebtsService {
     const debt = await this.own(userId, id);
     const p = await this.prisma.debtPayment.findFirst({ where: { id: paymentId, debtId: id } });
     if (!p) throw new NotFoundException('Abono no encontrado');
+    if (p.transactionId) throw new ConflictException('Este abono está registrado como movimiento: para cambiar la cuenta, bórralo y regístralo de nuevo.');
     const accountAmount = dto.accountId
       ? await this.accountAmount(userId, dto.accountId, debt.currency, p.amount, toDateOnly(p.date), dto.rate)
       : null;
@@ -185,8 +252,13 @@ class DebtsService {
     const debt = await this.own(userId, id);
     const p = await this.prisma.debtPayment.findFirst({ where: { id: paymentId, debtId: id } });
     if (!p) throw new NotFoundException('Abono no encontrado');
-    // Un abono y su copia en la cuenta del familiar se borran juntos
-    await this.prisma.debtPayment.delete({ where: { id: p.mirrorOfId ?? p.id } });
+    // Un abono y su copia en la cuenta del familiar se borran juntos, y también el movimiento que generó
+    const source = await this.prisma.debtPayment.findUniqueOrThrow({ where: { id: p.mirrorOfId ?? p.id } });
+    await this.prisma.$transaction(async (db) => {
+      if (source.transactionId) await db.transaction.delete({ where: { id: source.transactionId } });
+      if (p.transactionId && p.transactionId !== source.transactionId) await db.transaction.delete({ where: { id: p.transactionId } });
+      await db.debtPayment.delete({ where: { id: source.id } });
+    });
     if (debt.linkedDebtId) await this.syncSettled(debt.linkedDebtId).catch(() => undefined);
     return this.syncSettled(id);
   }
@@ -226,6 +298,9 @@ function positive(v: string) {
 class DebtsController {
   constructor(private debts: DebtsService) {}
 
+  @Get('payments') payments(@CurrentUser() u: AuthUser, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.debts.paymentsBetween(u.id, from, to);
+  }
   @Get() list(@CurrentUser() u: AuthUser) { return this.debts.list(u.id); }
   @Post() create(@CurrentUser() u: AuthUser, @Body() dto: CreateDebtDto) { return this.debts.create(u.id, dto); }
   @Patch(':id') update(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: UpdateDebtDto) { return this.debts.update(u.id, id, dto); }
@@ -239,5 +314,5 @@ class DebtsController {
   removePayment(@CurrentUser() u: AuthUser, @Param('id') id: string, @Param('pid') pid: string) { return this.debts.removePayment(u.id, id, pid); }
 }
 
-@Module({ imports: [PeopleModule, ExchangeRatesModule], controllers: [DebtsController], providers: [DebtsService] })
+@Module({ imports: [PeopleModule, ExchangeRatesModule, TransactionsModule], controllers: [DebtsController], providers: [DebtsService] })
 export class DebtsModule {}
