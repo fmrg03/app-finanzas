@@ -7,6 +7,9 @@ import type { Account, AccountSummary, Category, Currency, ExchangeRate, RateFor
 export const useAccounts = (includeArchived = false) =>
   useQuery({ queryKey: ['accounts', includeArchived], queryFn: () => api<Account[]>(`/accounts?includeArchived=${includeArchived}`) });
 
+/** Lo que te rindieron los bolívares comprados a mejor tasa que la registrada en los gastos (ya sumado en el neto). */
+export type FxGain = MoneyPair & { spentUsd: string; spentCostUsd: string };
+
 export const useAccountSummary = (id: string, from: string, to: string) =>
   useQuery({
     queryKey: ['accounts', id, 'summary', from, to],
@@ -111,8 +114,8 @@ export interface MoneyPair { usd: string; ves: string }
 export interface Overview {
   period: { from: string; to: string; days: number };
   previousPeriod: { from: string; to: string; days: number };
-  totals: { income: MoneyPair; expense: MoneyPair; net: MoneyPair; count: number };
-  previousTotals: { income: MoneyPair; expense: MoneyPair; net: MoneyPair; count: number };
+  totals: { income: MoneyPair; expense: MoneyPair; fxGain: FxGain; net: MoneyPair; count: number };
+  previousTotals: { income: MoneyPair; expense: MoneyPair; fxGain: FxGain; net: MoneyPair; count: number };
   expenseByCategory: ({ categoryId: string | null; name: string; color: string; count: number } & MoneyPair)[];
   monthly: { month: string; income: MoneyPair; expense: MoneyPair; net: MoneyPair }[];
   cumulativeExpense: { current: MoneyPair[]; previous: MoneyPair[] };

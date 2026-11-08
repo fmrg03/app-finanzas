@@ -6,7 +6,7 @@ import { useState, type FormEvent } from 'react';
 import { Button, ErrorNote, Field, Input, Select } from '@/components/ui/controls';
 import { Dialog } from '@/components/ui/dialog';
 import { api } from '@/lib/api';
-import { cn, money } from '@/lib/format';
+import { cn, money, rate } from '@/lib/format';
 import { useAccounts } from '@/lib/queries';
 import { ACCOUNT_LABEL, type Account, type AccountType, type Currency } from '@/lib/types';
 
@@ -42,6 +42,11 @@ export default function CuentasPage() {
                 </span>
                 <span className="flex flex-col items-end">
                   <span className={cn('text-lg font-extrabold tabular-nums', Number(a.balance) < 0 && 'text-expense')}>{money(a.balance, a.currency)}</span>
+                  {a.costRate && Number(a.balance) > 0 && (
+                    <span className="text-xs tabular-nums text-muted" title="Tasa promedio a la que compraste los bolívares de esta cuenta">
+                      Comprados a {rate(a.costRate)} Bs/$
+                    </span>
+                  )}
                   {Number(a.reserved) > 0 && (
                     <span className="text-xs tabular-nums text-muted" title={a.reservedFor.map((r) => `${r.description}: ${money(r.amount, a.currency)}`).join('\n')}>
                       {money(a.reserved, a.currency)} apartado, libre {money(Number(a.balance) - Number(a.reserved), a.currency)}

@@ -12,9 +12,9 @@ import { MonthNav, useMonth } from '@/components/month-nav';
 import { ErrorNote, Segmented } from '@/components/ui/controls';
 import { cn, money, monthLabel, monthRange } from '@/lib/format';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Check } from 'lucide-react';
+import { ArrowLeftRight, Check } from 'lucide-react';
 import { api } from '@/lib/api';
-import { useAccounts, useCategories, useMe, useOverview, type MoneyPair } from '@/lib/queries';
+import { useAccounts, useCategories, useMe, useOverview, type FxGain, type MoneyPair } from '@/lib/queries';
 import type { Currency } from '@/lib/types';
 
 const pick = (p: MoneyPair, c: Currency) => Number(c === 'USD' ? p.usd : p.ves);
@@ -67,8 +67,9 @@ export default function ResumenPage() {
           <section aria-label="Totales del mes" className="mt-4 grid grid-cols-3 gap-px overflow-hidden rounded-2xl bg-line">
             <Kpi label="Ingresos" value={pick(d.totals.income, currency)} prev={pick(d.previousTotals.income, currency)} currency={currency} goodWhenUp />
             <Kpi label="Gastos" value={pick(d.totals.expense, currency)} prev={pick(d.previousTotals.expense, currency)} currency={currency} />
-            <Kpi label="Balance" value={pick(d.totals.net, currency)} prev={pick(d.previousTotals.net, currency)} currency={currency} goodWhenUp signed />
+            <Kpi label="Neto del mes" value={pick(d.totals.net, currency)} prev={pick(d.previousTotals.net, currency)} currency={currency} goodWhenUp signed />
           </section>
+          <FxGainNote g={d.totals.fxGain} currency={currency} />
 
           {nav.isCurrent && <BudgetsGlance />}
           {nav.isCurrent && <ProjectionCard currency={currency} />}
@@ -132,6 +133,32 @@ function Pace({ d, currency, lastDay, isCurrent, prevLabel }: { d: NonNullable<R
       <p className="mt-1 text-4xl font-extrabold tracking-tight tabular-nums sm:text-5xl">{money(spent, currency)}</p>
       <p className={cn('mt-2 font-semibold', diff !== null && diff < -0.02 && 'text-income', diff !== null && diff > 0.02 && 'text-expense')}>{comparison}</p>
     </div>
+  );
+}
+
+/** Ganancia (o pérdida) por cambio: tus bolívares costaron menos (o más) que la tasa con que se anotaron los gastos. */
+function FxGainNote({ g, currency }: { g: FxGain; currency: Currency }) {
+  const v = pick(g, currency);
+  if (Math.abs(Number(g.usd)) < 0.01) return null;
+  const up = v > 0;
+  return (
+    <section aria-label="Ganancia por cambio" className="mt-2 flex items-start gap-3 rounded-2xl bg-surface px-4 py-3 sm:px-5">
+      <span className={cn('mt-0.5 grid size-8 shrink-0 place-items-center rounded-full', up ? 'bg-income-soft text-income' : 'bg-expense-soft text-expense')}>
+        <ArrowLeftRight size={16} />
+      </span>
+      <div className="min-w-0 text-sm">
+        <p>
+          <span className="font-semibold">{up ? 'Ganancia por cambio' : 'Pérdida por cambio'} </span>
+          <strong className={cn('tabular-nums', up ? 'text-income' : 'text-expense')}>{up ? '+' : '−'}{money(Math.abs(v), currency)}</strong>
+        </p>
+        {Number(g.spentUsd) > 0 && (
+          <p className="text-muted">
+            Gastaste {money(g.spentUsd, 'USD')} en bolívares a la tasa del día y te costaron {money(g.spentCostUsd, 'USD')} al cambio.
+            {' '}Ya está sumada en el neto del mes.
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
 

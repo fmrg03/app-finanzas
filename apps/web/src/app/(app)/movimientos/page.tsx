@@ -1,6 +1,6 @@
 'use client';
 
-import { ArrowRight, CreditCard, Download, HandCoins, Plus, Search, Users } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, CreditCard, Download, HandCoins, Plus, Search, Users } from 'lucide-react';
 import Link from 'next/link';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AmountPair } from '@/components/amount';
@@ -111,9 +111,18 @@ export default function MovimientosPage() {
           <Total label="Neto del mes" usd={t.netUsd} ves={t.netVes} tone={Number(t.netUsd) < 0 ? 'text-expense' : 'text-ink'} />
         </section>
       )}
+      {t && t.fxGainUsd !== null && Math.abs(Number(t.fxGainUsd)) >= 0.01 && (
+        <p className="mt-2 flex items-center gap-1.5 text-sm">
+          <ArrowLeftRight size={14} className={Number(t.fxGainUsd) > 0 ? 'text-income' : 'text-expense'} />
+          <span className="text-muted">{Number(t.fxGainUsd) > 0 ? 'Ganancia' : 'Pérdida'} por cambio, ya sumada en el neto:</span>
+          <strong className={cn('tabular-nums', Number(t.fxGainUsd) > 0 ? 'text-income' : 'text-expense')}>
+            {Number(t.fxGainUsd) > 0 ? '+' : '−'}{money(Math.abs(Number(t.fxGainUsd)), 'USD')}
+          </strong>
+        </p>
+      )}
       {t && !accountId && (
         <p className="mt-2 text-xs text-muted">
-          Neto del mes = ingresos − gastos {type || categoryId || q.trim() ? 'filtrados' : 'del mes'}, de todas tus cuentas (en compras compartidas, solo tu parte). No es el saldo de una cuenta: para verlo, filtra por cuenta.
+          Neto del mes = ingresos − gastos {type || categoryId || q.trim() ? 'filtrados' : 'del mes'}, de todas tus cuentas (en compras compartidas, solo tu parte){t.fxGainUsd !== null ? ', más lo que te rindieron los bolívares comprados a mejor tasa' : ''}. No es el saldo de una cuenta: para verlo, filtra por cuenta.
         </p>
       )}
 

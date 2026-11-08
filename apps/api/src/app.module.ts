@@ -22,6 +22,7 @@ import { PeopleModule } from './people/people.module';
 import { SharedModule } from './shared/shared.module';
 import { InstallmentsModule } from './installments/installments.module';
 import { ProjectionModule } from './projection/projection.module';
+import { FxModule } from './fx/fx.module';
 
 @Controller('health')
 class HealthController {
@@ -56,6 +57,7 @@ class HealthController {
     SharedModule,
     InstallmentsModule,
     ProjectionModule,
+    FxModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

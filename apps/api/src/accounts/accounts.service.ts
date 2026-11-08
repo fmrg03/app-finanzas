@@ -1,12 +1,13 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { parseDateOnly } from '../common/date.util';
+import { FxService } from '../fx/fx.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAccountDto, UpdateAccountDto } from './dto/account.dto';
 
 @Injectable()
 export class AccountsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private fx: FxService) {}
 
   /** Lista las cuentas con su saldo actual, calculado en la moneda de cada cuenta. */
   async findAll(userId: string, includeArchived = false) {
@@ -30,6 +31,7 @@ export class AccountsService {
       }),
     ]);
     const reserved = await this.reservedByAccount(userId);
+    const costRates = await this.fx.avgRates(userId);
     return accounts.map((acc) => {
       let balance = new Prisma.Decimal(acc.initialBalance);
       for (const s of sums.filter((x) => x.accountId === acc.id)) {
@@ -46,6 +48,8 @@ export class AccountsService {
       return {
         ...acc,
         balance: balance.toFixed(2),
+        // Cuentas en Bs: tasa promedio a la que compraste los bolívares que tiene
+        costRate: costRates.get(acc.id)?.toFixed(2) ?? null,
         // Apartado para pagos de varios meses: sigue en la cuenta, pero ya tiene destino
         reserved: res.reduce((a, x) => a.add(x.amount), new Prisma.Decimal(0)).toFixed(2),
         reservedFor: res.map((x) => ({ recurringId: x.recurringId, description: x.description, amount: x.amount.toFixed(2) })),

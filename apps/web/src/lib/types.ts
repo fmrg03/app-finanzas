@@ -11,6 +11,8 @@ export interface Account {
   initialBalance: string;
   balance: string;
   archivedAt: string | null;
+  /** Cuentas en Bs: tasa promedio (Bs por USD) a la que compraste los bolívares que tiene */
+  costRate: string | null;
   /** Apartado para pagos de varios meses: sigue en la cuenta, pero ya tiene destino */
   reserved: string;
   reservedFor: { recurringId: string; description: string; amount: string }[];
@@ -132,7 +134,11 @@ export interface TxList {
   total: number;
   page: number;
   pageSize: number;
-  totals: { incomeUsd: string; incomeVes: string; expenseUsd: string; expenseVes: string; netUsd: string; netVes: string };
+  totals: {
+    incomeUsd: string; incomeVes: string; expenseUsd: string; expenseVes: string; netUsd: string; netVes: string;
+    /** Ganancia por cambio del período (null si hay filtros de tipo, categoría o búsqueda) */
+    fxGainUsd: string | null; fxGainVes: string | null;
+  };
 }
 
 export interface ExchangeRate {

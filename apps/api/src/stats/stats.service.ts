@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
+import { FxService } from '../fx/fx.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { OverviewDto } from './stats.dto';
 
@@ -21,7 +22,7 @@ const lastOfMonth = (d: Date, shift = 0) => new Date(Date.UTC(d.getUTCFullYear()
 
 @Injectable()
 export class StatsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService, private fx: FxService) {}
 
   async overview(userId: string, q: OverviewDto) {
     const from = parseDateOnly(q.from);
@@ -92,13 +93,22 @@ export class StatsService {
       const acc = pair();
       return arr.map((p) => { add(acc, p.usd, p.ves); return out(acc); });
     };
-    const net = (t: typeof cur) => ({ usd: t.income.usd.sub(t.expense.usd).toFixed(2), ves: t.income.ves.sub(t.expense.ves).toFixed(2) });
+    // Ganancia por cambio: lo que te rindieron los bolívares comprados a mejor tasa que la registrada en los gastos
+    const fxCur = await this.fx.period(userId, toDateOnly(from), toDateOnly(to));
+    const fxPrev = await this.fx.period(userId, toDateOnly(prevFrom), toDateOnly(prevTo));
+    const net = (t: typeof cur, g: typeof fxCur) => ({
+      usd: t.income.usd.sub(t.expense.usd).add(g.gainUsd).toFixed(2),
+      ves: t.income.ves.sub(t.expense.ves).add(g.gainVes).toFixed(2),
+    });
+    const fxOut = (g: typeof fxCur) => ({
+      usd: g.gainUsd.toFixed(2), ves: g.gainVes.toFixed(2), spentUsd: g.spentUsd.toFixed(2), spentCostUsd: g.spentCostUsd.toFixed(2),
+    });
 
     return {
       period: { from: toDateOnly(from), to: toDateOnly(to), days },
       previousPeriod: { from: toDateOnly(prevFrom), to: toDateOnly(prevTo), days: prevDays },
-      totals: { income: out(cur.income), expense: out(cur.expense), net: net(cur), count: cur.count },
-      previousTotals: { income: out(prev.income), expense: out(prev.expense), net: net(prev), count: prev.count },
+      totals: { income: out(cur.income), expense: out(cur.expense), fxGain: fxOut(fxCur), net: net(cur, fxCur), count: cur.count },
+      previousTotals: { income: out(prev.income), expense: out(prev.expense), fxGain: fxOut(fxPrev), net: net(prev, fxPrev), count: prev.count },
       expenseByCategory: [...byCat.entries()]
         .map(([id, v]) => {
           const c = id === 'none' ? null : byId.get(id);

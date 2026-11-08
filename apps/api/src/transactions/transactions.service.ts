@@ -4,6 +4,7 @@ import { Prisma, RateSource, TransactionSource } from '@prisma/client';
 import { convertAmounts } from '../common/money.util';
 import { parseDateOnly, toDateOnly } from '../common/date.util';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
+import { FxService } from '../fx/fx.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTransactionDto, ListTransactionsDto, UpdateTransactionDto } from './dto/transaction.dto';
 
@@ -52,6 +53,7 @@ export class TransactionsService {
   constructor(
     private prisma: PrismaService,
     private rates: ExchangeRatesService,
+    private fx: FxService,
   ) {}
 
   async list(userId: string, q: ListTransactionsDto) {
@@ -79,13 +81,18 @@ export class TransactionsService {
     const inc = tot('INCOME');
     const exp = tot('EXPENSE');
     const z = new Prisma.Decimal(0);
+    // Ganancia por cambio del período (solo sin filtros de tipo, categoría o búsqueda: es de las cuentas, no de un gasto)
+    const plain = q.from && q.to && !q.type && !q.categoryId?.length && !q.uncategorized && !q.tag && !q.source && !q.q;
+    const fx = plain ? await this.fx.period(userId, q.from!, q.to!, q.accountId) : null;
     const totals = {
       incomeUsd: (inc?.myAmountUsd ?? z).toFixed(2),
       incomeVes: (inc?.myAmountVes ?? z).toFixed(2),
       expenseUsd: (exp?.myAmountUsd ?? z).toFixed(2),
       expenseVes: (exp?.myAmountVes ?? z).toFixed(2),
-      netUsd: new Prisma.Decimal(inc?.myAmountUsd ?? 0).sub(exp?.myAmountUsd ?? 0).toFixed(2),
-      netVes: new Prisma.Decimal(inc?.myAmountVes ?? 0).sub(exp?.myAmountVes ?? 0).toFixed(2),
+      fxGainUsd: fx ? fx.gainUsd.toFixed(2) : null,
+      fxGainVes: fx ? fx.gainVes.toFixed(2) : null,
+      netUsd: new Prisma.Decimal(inc?.myAmountUsd ?? 0).sub(exp?.myAmountUsd ?? 0).add(fx?.gainUsd ?? 0).toFixed(2),
+      netVes: new Prisma.Decimal(inc?.myAmountVes ?? 0).sub(exp?.myAmountVes ?? 0).add(fx?.gainVes ?? 0).toFixed(2),
     };
 
     return { items: items.map(this.present), total, page: q.page, pageSize: q.pageSize, totals };
