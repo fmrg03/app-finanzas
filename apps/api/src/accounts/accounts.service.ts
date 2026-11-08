@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { parseDateOnly } from '../common/date.util';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAccountDto, UpdateAccountDto } from './dto/account.dto';
 
@@ -50,6 +51,56 @@ export class AccountsService {
         reservedFor: res.map((x) => ({ recurringId: x.recurringId, description: x.description, amount: x.amount.toFixed(2) })),
       };
     });
+  }
+
+  /**
+   * Cómo llega una cuenta de un saldo a otro en un período: lo que había al empezar, lo que entró y salió
+   * (ingresos y gastos por el monto completo, transferencias, abonos que solo movieron la cuenta) y el saldo al final.
+   */
+  async summary(userId: string, id: string, from: string, to: string) {
+    const acc = await this.prisma.account.findFirst({ where: { id, userId } });
+    if (!acc) throw new NotFoundException('Cuenta no encontrada');
+    const usd = acc.currency === 'USD';
+    const D = Prisma.Decimal;
+    const z = new D(0);
+    const flows = async (date: Prisma.DateTimeFilter) => {
+      const [tx, outs, ins, pays] = await Promise.all([
+        this.prisma.transaction.groupBy({ by: ['type'], where: { userId, accountId: id, date }, _sum: { amountUsd: true, amountVes: true } }),
+        this.prisma.transfer.aggregate({ where: { userId, fromAccountId: id, date }, _sum: { fromAmount: true } }),
+        this.prisma.transfer.aggregate({ where: { userId, toAccountId: id, date }, _sum: { toAmount: true } }),
+        this.prisma.debtPayment.findMany({
+          where: { accountId: id, transactionId: null, debt: { userId }, date },
+          select: { amount: true, accountAmount: true, debt: { select: { direction: true } } },
+        }),
+      ]);
+      const t = (type: 'INCOME' | 'EXPENSE') => {
+        const s = tx.find((x) => x.type === type)?._sum;
+        return new D((usd ? s?.amountUsd : s?.amountVes) ?? 0);
+      };
+      const pay = (dir: 'OWED_TO_ME' | 'I_OWE') => pays.filter((p) => p.debt.direction === dir).reduce((a, p) => a.add(p.accountAmount ?? p.amount), z);
+      const f = {
+        income: t('INCOME'), expense: t('EXPENSE'),
+        transfersIn: new D(ins._sum.toAmount ?? 0), transfersOut: new D(outs._sum.fromAmount ?? 0),
+        paymentsIn: pay('OWED_TO_ME'), paymentsOut: pay('I_OWE'),
+      };
+      return { ...f, net: f.income.sub(f.expense).add(f.transfersIn).sub(f.transfersOut).add(f.paymentsIn).sub(f.paymentsOut) };
+    };
+    const before = await flows({ lt: parseDateOnly(from) });
+    const period = await flows({ gte: parseDateOnly(from), lte: parseDateOnly(to) });
+    const after = await flows({ gt: parseDateOnly(to) });
+    const opening = new D(acc.initialBalance).add(before.net);
+    const closing = opening.add(period.net);
+    const fx = (v: Prisma.Decimal) => v.toFixed(2);
+    return {
+      accountId: id, currency: acc.currency, from, to,
+      opening: fx(opening),
+      income: fx(period.income), expense: fx(period.expense),
+      transfersIn: fx(period.transfersIn), transfersOut: fx(period.transfersOut),
+      paymentsIn: fx(period.paymentsIn), paymentsOut: fx(period.paymentsOut),
+      closing: fx(closing),
+      // Saldo de hoy, contando lo registrado con fecha posterior al período
+      current: fx(closing.add(after.net)),
+    };
   }
 
   /** Lo apartado en cada recurrente activo con saldo, convertible a la moneda de su cuenta con la última tasa. */

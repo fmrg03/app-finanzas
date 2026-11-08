@@ -2,11 +2,17 @@
 
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import type { Account, Category, Currency, ExchangeRate, RateForDate, RateSource, ReceiptRead, TxList, TxType } from './types';
+import type { Account, AccountSummary, Category, Currency, ExchangeRate, RateForDate, RateSource, ReceiptRead, TxList, TxType } from './types';
 
 export const useAccounts = (includeArchived = false) =>
   useQuery({ queryKey: ['accounts', includeArchived], queryFn: () => api<Account[]>(`/accounts?includeArchived=${includeArchived}`) });
 
+export const useAccountSummary = (id: string, from: string, to: string) =>
+  useQuery({
+    queryKey: ['accounts', id, 'summary', from, to],
+    queryFn: () => api<AccountSummary>(`/accounts/${id}/summary?from=${from}&to=${to}`),
+    enabled: !!id,
+  });
 export const useCategories = () => useQuery({ queryKey: ['categories'], queryFn: () => api<Category[]>('/categories') });
 
 export const useLatestRates = () =>

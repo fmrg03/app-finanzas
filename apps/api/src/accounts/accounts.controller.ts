@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, Param, ParseBoolPipe, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, ParseBoolPipe, Patch, Post, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AccountsService } from './accounts.service';
@@ -13,6 +13,13 @@ export class AccountsController {
   @ApiQuery({ name: 'includeArchived', required: false, type: Boolean })
   findAll(@CurrentUser() u: AuthUser, @Query('includeArchived', new ParseBoolPipe({ optional: true })) includeArchived?: boolean) {
     return this.accounts.findAll(u.id, includeArchived);
+  }
+
+  @Get(':id/summary')
+  @ApiQuery({ name: 'from', example: '2026-11-01' }) @ApiQuery({ name: 'to', example: '2026-11-30' })
+  summary(@CurrentUser() u: AuthUser, @Param('id') id: string, @Query('from') from: string, @Query('to') to: string) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from ?? '') || !/^\d{4}-\d{2}-\d{2}$/.test(to ?? '')) throw new BadRequestException('Indica from y to (AAAA-MM-DD)');
+    return this.accounts.summary(u.id, id, from, to);
   }
 
   @Get(':id')

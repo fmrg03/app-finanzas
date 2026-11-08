@@ -2,7 +2,7 @@
 
 import { ArrowRight, CreditCard, Download, HandCoins, Plus, Search, Users } from 'lucide-react';
 import Link from 'next/link';
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AmountPair } from '@/components/amount';
 import { DueRecurring } from '@/components/due-recurring';
 import { MonthNav, useMonth } from '@/components/month-nav';
@@ -13,7 +13,7 @@ import { Dialog } from '@/components/ui/dialog';
 import { downloadFile } from '@/lib/api';
 import { cn, dayLabel, money, monthLabel, monthRange, rate, signedPct } from '@/lib/format';
 import { useDebtPayments, useTransfers } from '@/lib/planning';
-import { txParams, useAccounts, useCategories, useTransactions } from '@/lib/queries';
+import { txParams, useAccounts, useAccountSummary, useCategories, useTransactions } from '@/lib/queries';
 import type { DebtPaymentItem, Transaction, Transfer, TxType } from '@/lib/types';
 
 type Editing = { kind: 'tx'; tx?: Transaction; type?: TxType } | { kind: 'transfer'; transfer?: Transfer } | null;
@@ -108,8 +108,13 @@ export default function MovimientosPage() {
         <section aria-label="Totales del mes" className="mt-6 grid grid-cols-3 gap-px overflow-hidden rounded-2xl bg-line">
           <Total label="Ingresos" usd={t.incomeUsd} ves={t.incomeVes} tone="text-income" />
           <Total label="Gastos" usd={t.expenseUsd} ves={t.expenseVes} tone="text-expense" />
-          <Total label="Balance" usd={t.netUsd} ves={t.netVes} tone={Number(t.netUsd) < 0 ? 'text-expense' : 'text-ink'} />
+          <Total label="Neto del mes" usd={t.netUsd} ves={t.netVes} tone={Number(t.netUsd) < 0 ? 'text-expense' : 'text-ink'} />
         </section>
+      )}
+      {t && !accountId && (
+        <p className="mt-2 text-xs text-muted">
+          Neto del mes = ingresos − gastos {type || categoryId || q.trim() ? 'filtrados' : 'del mes'}, de todas tus cuentas (en compras compartidas, solo tu parte). No es el saldo de una cuenta: para verlo, filtra por cuenta.
+        </p>
       )}
 
       <DueRecurring />
@@ -134,6 +139,8 @@ export default function MovimientosPage() {
           {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </Select>
       </section>
+
+      {accountId && <AccountFlow id={accountId} from={from} to={to} />}
 
       <div className="mt-6">
         {txQ.isError && <ErrorNote>{(txQ.error as Error).message}</ErrorNote>}
@@ -287,6 +294,43 @@ function PaymentRow({ p }: { p: DebtPaymentItem }) {
         <span className="text-xs text-muted">no cuenta como gasto</span>
       </span>
     </Link>
+  );
+}
+
+/** Cómo llega la cuenta del saldo al empezar el mes al saldo al terminarlo. */
+function AccountFlow({ id, from, to }: { id: string; from: string; to: string }) {
+  const { data: s } = useAccountSummary(id, from, to);
+  const { data: accounts = [] } = useAccounts();
+  if (!s) return null;
+  const acc = accounts.find((a) => a.id === id);
+  const c = s.currency;
+  const today = new Date().toISOString().slice(0, 10);
+  const endsToday = to >= today;
+  const fecha = (d: string) => `${Number(d.slice(8))} ${new Intl.DateTimeFormat('es-VE', { month: 'short' }).format(new Date(`${d}T12:00:00`)).replace('.', '')}`;
+  const rows: [string, string, 1 | -1][] = (
+    [
+      ['Ingresos', s.income, 1], ['Gastos (monto completo)', s.expense, -1],
+      ['Transferencias recibidas', s.transfersIn, 1], ['Transferencias enviadas', s.transfersOut, -1],
+      ['Abonos de deudas recibidos', s.paymentsIn, 1], ['Abonos de deudas pagados', s.paymentsOut, -1],
+    ] as [string, string, 1 | -1][]
+  ).filter(([, v]) => Number(v) !== 0);
+  return (
+    <section aria-label={`Saldo de ${acc?.name ?? 'la cuenta'}`} className="mt-4 rounded-2xl bg-surface p-4 sm:p-5">
+      <h2 className="font-bold">Saldo de {acc?.name ?? 'la cuenta'}</h2>
+      <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 text-sm tabular-nums">
+        <dt className="text-muted">Al empezar el {fecha(from)}</dt><dd className="text-right">{money(s.opening, c)}</dd>
+        {rows.map(([label, v, sign]) => (
+          <Fragment key={label}>
+            <dt className="text-muted">{sign > 0 ? '+' : '−'} {label}</dt>
+            <dd className={cn('text-right', sign > 0 ? 'text-income' : 'text-expense')}>{money(v, c)}</dd>
+          </Fragment>
+        ))}
+        <dt className="border-t border-line pt-1 font-semibold">{endsToday ? 'Saldo hoy' : `Al cerrar el ${fecha(to)}`}</dt>
+        <dd className="border-t border-line pt-1 text-right font-extrabold">{money(endsToday ? s.current : s.closing, c)}</dd>
+        {!endsToday && s.current !== s.closing && (<><dt className="text-muted">Saldo hoy</dt><dd className="text-right">{money(s.current, c)}</dd></>)}
+      </dl>
+      <p className="mt-2 text-xs text-muted">Este es el número que debe cuadrar con tu banco. Si no cuadra, revisa el saldo inicial de la cuenta o algún movimiento que falte.</p>
+    </section>
   );
 }
 

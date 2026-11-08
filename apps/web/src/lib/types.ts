@@ -362,3 +362,19 @@ export interface ProjectedMonth {
   totals: { income: MoneyBoth; expense: MoneyBoth; reserve: MoneyBoth; funded: MoneyBoth; installments: MoneyBoth; free: MoneyBoth; count: number };
 }
 export interface Projection { today: string; rates: Record<string, string>; months: ProjectedMonth[] }
+
+export interface AccountSummary {
+  accountId: string;
+  currency: Currency;
+  from: string;
+  to: string;
+  opening: string;
+  income: string;
+  expense: string;
+  transfersIn: string;
+  transfersOut: string;
+  paymentsIn: string;
+  paymentsOut: string;
+  closing: string;
+  current: string;
+}
