@@ -189,7 +189,8 @@ model Account {
   transfersTo      Transfer[]        @relation("TransferTo")
   recurrings       Recurring[]
   debtPayments     DebtPayment[]
-  installmentPlans InstallmentPlan[]
+  installmentPlans InstallmentPlan[] @relation("PlanAccount")
+  myPartPlans      InstallmentPlan[] @relation("PlanMyAccount")
 
   @@unique([userId, name])
 }
@@ -576,6 +577,8 @@ model InstallmentPlan {
   frequency      InstallmentFrequency
   // Cuenta con la que se pagó la inicial (vacía si la compra la hizo otra persona)
   accountId      String?
+  // Compra que pagó otra persona: cuenta de la que sale tu parte (inicial y cuotas); vacía si aún no la eliges
+  myAccountId    String?
   rateSource     RateSource
   rateUsed       Decimal              @db.Decimal(18, 6)
   sharedId       String?              @unique
@@ -584,7 +587,8 @@ model InstallmentPlan {
 
   user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   category     Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  account      Account?       @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  account      Account?       @relation("PlanAccount", fields: [accountId], references: [id], onDelete: Restrict)
+  myAccount    Account?       @relation("PlanMyAccount", fields: [myAccountId], references: [id], onDelete: SetNull)
   shared       SharedExpense? @relation(fields: [sharedId], references: [id], onDelete: SetNull)
   installments Installment[]
   transactions Transaction[]

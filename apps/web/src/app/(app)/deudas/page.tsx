@@ -334,6 +334,31 @@ function PlansTab() {
 
 const pctLabel = (v: string | null) => `${Number(v).toLocaleString('es-VE', { maximumFractionDigits: 2 })} %`;
 
+/** Compra que pagó otra persona: de qué cuenta tuya sale tu parte de la inicial y de cada cuota. */
+function MyPartAccount({ p }: { p: InstallmentPlan }) {
+  const { data: accounts = [] } = useAccounts();
+  const set = useApiMutation((accountId: string | null) => api(`/installment-plans/${p.id}/my-account`, { method: 'PATCH', json: { accountId } }));
+  const active = accounts.filter((a) => !a.archivedAt);
+  return (
+    <div className={cn('mt-2 flex flex-wrap items-center gap-2 rounded-lg px-3 py-2 text-sm', p.myAccount ? 'bg-canvas' : 'bg-warning-soft')}>
+      <label htmlFor={`my-${p.id}`} className={cn('font-medium', !p.myAccount && 'text-warning')}>
+        {p.myAccount ? 'Tu parte sale de' : 'Elige de qué cuenta sale tu parte'}
+      </label>
+      <Select
+        id={`my-${p.id}`}
+        value={p.myAccount?.id ?? ''}
+        onChange={(e) => set.mutate(e.target.value || null)}
+        disabled={set.isPending}
+        className="h-9 min-w-0 flex-1"
+      >
+        <option value="">Ninguna todavía</option>
+        {active.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.currency === 'USD' ? '$' : 'Bs, a BCV'})</option>)}
+      </Select>
+      {set.error && <p className="w-full text-xs text-expense">{set.error.message}</p>}
+    </div>
+  );
+}
+
 function PlanCard({ p }: { p: InstallmentPlan }) {
   const [paying, setPaying] = useState<string | null>(null);
   const [showShare, setShowShare] = useState(false);
@@ -364,8 +389,9 @@ function PlanCard({ p }: { p: InstallmentPlan }) {
       <Progress className="mt-2" pct={pct} tone={Number(p.remainingUsd) <= 0 ? 'income' : 'accent'} label={`Pagado ${Math.round(pct)} %`} />
       <p className="mt-1 text-xs text-muted">
         Inicial {money(p.downPaymentUsd, 'USD')} y {p.paidCount} de {p.count} cuotas pagadas.
-        {!p.paidByMe && ' Tu parte de cada cuota se registra sola en su fecha.'}
+        {!p.paidByMe && ` Tu parte de cada cuota se registra cuando ${p.shared?.paidBy?.name ?? 'quien pagó'} la marca pagada (o al vencer) y abona tu deuda.`}
       </p>
+      {!p.paidByMe && <MyPartAccount p={p} />}
 
       <ul className="mt-3 divide-y divide-line text-sm">
         {p.installments.map((i) => (

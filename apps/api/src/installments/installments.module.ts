@@ -69,6 +69,10 @@ export class CreatePlanDto {
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsString()
   accountId?: string | null;
 
+  @ApiPropertyOptional({ nullable: true, description: 'Si la pagó otra persona: cuenta de la que sale tu parte de la inicial y de cada cuota' })
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString()
+  myAccountId?: string | null;
+
   @ApiPropertyOptional({ type: SplitDto, description: 'Si la compra es compartida' })
   @IsOptional() @ValidateNested() @Type(() => SplitDto)
   split?: SplitDto;
@@ -99,10 +103,17 @@ class PayInstallmentDto {
   rate?: string;
 }
 
+class MyAccountDto {
+  @ApiPropertyOptional({ nullable: true, description: 'Cuenta de la que sale tu parte; null para no usar ninguna' })
+  @ValidateIf((_, v) => v !== null) @IsString()
+  accountId!: string | null;
+}
+
 const D = Prisma.Decimal;
 const PLAN_INCLUDE = {
   category: { select: { id: true, name: true, color: true } },
   account: { select: { id: true, name: true, currency: true } },
+  myAccount: { select: { id: true, name: true, currency: true } },
   shared: {
     select: {
       id: true, splitMode: true, totalUsd: true, paidByPersonId: true,
@@ -191,12 +202,14 @@ export class InstallmentsService implements OnApplicationBootstrap {
     const paidByMe = dto.split?.paidByPersonId == null;
     if (paidByMe && !dto.accountId) throw new BadRequestException('Indica con qué cuenta pagaste la inicial');
     if (paidByMe) await this.transactions.assertAccount(userId, dto.accountId!);
+    if (!paidByMe && dto.myAccountId) await this.transactions.assertAccount(userId, dto.myAccountId);
     const category = await this.transactions.assertCategory(userId, dto.categoryId ?? null, 'EXPENSE');
     const frequency = dto.frequency ?? 'DAYS_14';
 
     // Precio total fijado en USD con la tasa del día de la compra
     const total = await this.transactions.snapshot(userId, {
-      currency: dto.currency, amount: dto.amount, date: dto.date, rateSource: dto.rateSource ?? category?.defaultRateSource ?? undefined, rate: dto.rate,
+      // Cashea y similares cobran a BCV: es la tasa por defecto de las compras en cuotas
+      currency: dto.currency, amount: dto.amount, date: dto.date, rateSource: dto.rate ? undefined : (dto.rateSource ?? 'BCV'), rate: dto.rate,
     });
     const totalUsd = total.amountUsd;
     let down: Prisma.Decimal;
@@ -229,7 +242,8 @@ export class InstallmentsService implements OnApplicationBootstrap {
         data: {
           userId, provider: dto.provider.trim(), store: dto.store?.trim() || null, description: dto.description.trim(),
           categoryId: dto.categoryId ?? null, purchaseDate: purchase, totalUsd, downPaymentUsd: down, count: dto.count, frequency,
-          accountId: paidByMe ? dto.accountId! : null, rateSource: total.rateSource, rateUsed: total.rateUsed, sharedId,
+          accountId: paidByMe ? dto.accountId! : null, myAccountId: !paidByMe ? (dto.myAccountId ?? null) : null,
+          rateSource: total.rateSource, rateUsed: total.rateUsed, sharedId,
           installments: { create: dates.map((d, i) => ({ n: i + 1, dueDate: d, amountUsd: amounts[i] })) },
         },
       });
@@ -250,6 +264,7 @@ export class InstallmentsService implements OnApplicationBootstrap {
       return { planId: plan.id, sharedId };
     });
     // A los familiares vinculados les aparece la compra con su parte; sus cuotas vencidas se registran ya
+    if (!paidByMe) await this.applyMyAccount(created.planId);
     if (created.sharedId && (await this.mirrors.sync(created.sharedId))) await this.processDueSafe();
     else await this.processDueSafe(userId);
     return this.findOne(userId, created.planId);
@@ -309,7 +324,20 @@ export class InstallmentsService implements OnApplicationBootstrap {
       await db.installment.update({ where: { id: inst.id }, data: { transactionId: created.id } });
       return created;
     });
+    // Compra compartida: a los demás (familiares) se les registra su parte de esta cuota el mismo día
+    if (inst.plan.sharedId) await this.registerOthers(inst.plan.sharedId, inst.n, date);
     return { installmentId: inst.id, transaction: await this.transactions.findOne(userId, tx.id) };
+  }
+
+  /** Elige la cuenta de la que sale tu parte en una compra que pagó otra persona; lo ya registrado sin cuenta pasa a ella. */
+  async setMyAccount(userId: string, id: string, dto: MyAccountDto) {
+    const plan = await this.prisma.installmentPlan.findFirst({ where: { id, userId }, include: { shared: { select: { paidByPersonId: true } } } });
+    if (!plan) throw new NotFoundException('Compra en cuotas no encontrada');
+    if (!plan.shared?.paidByPersonId) throw new BadRequestException('Esta compra la pagas tú: la cuenta de cada cuota se elige al pagarla');
+    if (dto.accountId) await this.transactions.assertAccount(userId, dto.accountId);
+    await this.prisma.installmentPlan.update({ where: { id }, data: { myAccountId: dto.accountId } });
+    await this.applyMyAccount(id);
+    return this.findOne(userId, id);
   }
 
   /** Deshace el pago: borra el movimiento y la cuota vuelve a quedar pendiente. */
@@ -319,9 +347,13 @@ export class InstallmentsService implements OnApplicationBootstrap {
     if (inst.plan.shared?.paidByPersonId) throw new ConflictException('Esta compra la hizo otra persona: sus cuotas se registran solas');
     if (!inst.transactionId) throw new ConflictException(`La cuota ${inst.n} no está pagada`);
     await this.prisma.transaction.delete({ where: { id: inst.transactionId } });
+    if (inst.plan.sharedId) await this.unregisterOthers(inst.plan.sharedId, inst.n);
   }
 
-  /** Registra tu parte de las cuotas vencidas de compras que hizo otra persona (no tocan tus cuentas). */
+  /**
+   * Compras que hizo otra persona: tu parte de cada cuota se registra cuando ella la marca pagada,
+   * o al vencer si no la marcó. Sale de la cuenta que elegiste y baja tu deuda con ella.
+   */
   async processDue(userId?: string) {
     const today = parseDateOnly(todayLocal());
     const due = await this.prisma.installment.findMany({
@@ -330,30 +362,104 @@ export class InstallmentsService implements OnApplicationBootstrap {
       orderBy: { dueDate: 'asc' },
     });
     let created = 0;
-    for (const inst of due) {
-      const sharePct = await this.myPct(inst.plan.sharedId!);
-      const date = toDateOnly(inst.dueDate);
-      const snapshot = await this.transactions.snapshot(inst.plan.userId, {
-        currency: 'USD', amount: inst.amountUsd.toFixed(2), date,
-        ...(inst.plan.rateSource === 'MANUAL' ? { rate: inst.plan.rateUsed.toString() } : { rateSource: inst.plan.rateSource }),
-        sharePct,
-      });
+    for (const inst of due) if (await this.registerPart(inst, toDateOnly(inst.dueDate))) created++;
+    return created;
+  }
+
+  /** Tu parte de una cuota de una compra que pagó otra persona, con la tasa del día en que se paga (BCV en Cashea). */
+  private async registerPart(inst: Prisma.InstallmentGetPayload<{ include: { plan: true } }>, date: string) {
+    const sharePct = await this.myPct(inst.plan.sharedId!);
+    const snapshot = await this.transactions.snapshot(inst.plan.userId, {
+      currency: 'USD', amount: inst.amountUsd.toFixed(2), date,
+      ...(inst.plan.rateSource === 'MANUAL' ? { rate: inst.plan.rateUsed.toString() } : { rateSource: inst.plan.rateSource }),
+      sharePct,
+    });
+    const done = await this.prisma.$transaction(async (db) => {
+      // Si otro proceso ya la registró, no se duplica
+      const fresh = await db.installment.findUnique({ where: { id: inst.id }, select: { transactionId: true } });
+      if (fresh?.transactionId) return false;
+      const tx = await this.transactions.insert(
+        inst.plan.userId,
+        { accountId: null, categoryId: inst.plan.categoryId, type: 'EXPENSE', date, description: `${inst.plan.provider}: ${inst.plan.description} (cuota ${inst.n}/${inst.plan.count})` },
+        snapshot,
+        { source: 'INSTALLMENT', externalId: `inst:${inst.id}`, installmentPlanId: inst.planId },
+        db,
+      );
+      await db.installment.update({ where: { id: inst.id }, data: { transactionId: tx.id } });
+      return true;
+    });
+    if (done) await this.applyMyAccount(inst.planId);
+    return done;
+  }
+
+  /** Al pagar una cuota de una compra compartida, registra la parte de cada familiar que la tiene en su cuenta. */
+  private async registerOthers(sharedId: string, n: number, date: string) {
+    const items = await this.prisma.installment.findMany({
+      where: { n, transactionId: null, plan: { shared: { mirrorOfId: sharedId } } },
+      include: { plan: true },
+    });
+    for (const i of items) await this.registerPart(i, date).catch((e) => this.log.error(`Parte de cuota ${i.id}: ${(e as Error).message}`));
+  }
+
+  /** Si se deshace el pago de una cuota que aún no vencía, se deshace también la parte de los familiares. */
+  private async unregisterOthers(sharedId: string, n: number) {
+    const today = parseDateOnly(todayLocal());
+    const items = await this.prisma.installment.findMany({
+      where: { n, transactionId: { not: null }, dueDate: { gt: today }, plan: { shared: { mirrorOfId: sharedId } } },
+      include: { plan: true },
+    });
+    for (const i of items) {
       await this.prisma.$transaction(async (db) => {
-        // Si otro proceso ya la registró, no se duplica
-        const fresh = await db.installment.findUnique({ where: { id: inst.id }, select: { transactionId: true } });
-        if (fresh?.transactionId) return;
-        const tx = await this.transactions.insert(
-          inst.plan.userId,
-          { accountId: null, categoryId: inst.plan.categoryId, type: 'EXPENSE', date, description: `${inst.plan.provider}: ${inst.plan.description} (cuota ${inst.n}/${inst.plan.count})` },
-          snapshot,
-          { source: 'INSTALLMENT', externalId: `inst:${inst.id}`, installmentPlanId: inst.planId },
-          db,
-        );
-        await db.installment.update({ where: { id: inst.id }, data: { transactionId: tx.id } });
-        created++;
+        const pays = await db.debtPayment.findMany({ where: { transactionId: i.transactionId! }, include: { debt: true } });
+        await db.debtPayment.deleteMany({ where: { id: { in: pays.map((p) => p.id) } } });
+        await db.transaction.delete({ where: { id: i.transactionId! } });
+        for (const p of pays) await this.settle(db, p.debt.id, p.debt.linkedDebtId);
       });
     }
-    return created;
+  }
+
+  /**
+   * Lo registrado de tu parte sin cuenta (la inicial, cuotas) pasa a la cuenta elegida: el gasto queda por tu parte
+   * (es lo que sale de tu bolsillo) y cuenta como abono a tu deuda con quien pagó, que lo ve en su lado.
+   */
+  async applyMyAccount(planId: string) {
+    const plan = await this.prisma.installmentPlan.findUnique({ where: { id: planId } });
+    if (!plan?.myAccountId || !plan.sharedId) return;
+    const txs = await this.prisma.transaction.findMany({
+      where: { userId: plan.userId, installmentPlanId: plan.id, accountId: null }, orderBy: { date: 'asc' },
+    });
+    if (!txs.length) return;
+    const debt = await this.prisma.debt.findFirst({ where: { userId: plan.userId, sharedId: plan.sharedId, direction: 'I_OWE' } });
+    await this.prisma.$transaction(async (db) => {
+      for (const t of txs) {
+        await db.transaction.update({
+          where: { id: t.id },
+          data: {
+            accountId: plan.myAccountId, originalCurrency: 'USD', originalAmount: t.myAmountUsd, amountUsd: t.myAmountUsd, amountVes: t.myAmountVes,
+            sharePct: null,
+          },
+        });
+        if (!debt) continue;
+        const paid = (await db.debtPayment.aggregate({ where: { debtId: debt.id }, _sum: { amount: true } }))._sum.amount ?? new D(0);
+        const amount = D.min(t.myAmountUsd, debt.amount.sub(paid));
+        if (amount.lte(0)) continue;
+        // El movimiento ya mueve la cuenta; el abono solo baja la deuda
+        const p = await db.debtPayment.create({ data: { debtId: debt.id, amount, date: t.date, accountId: plan.myAccountId, transactionId: t.id } });
+        if (debt.linkedDebtId) await db.debtPayment.create({ data: { debtId: debt.linkedDebtId, amount, date: t.date, mirrorOfId: p.id } });
+      }
+      if (debt) await this.settle(db, debt.id, debt.linkedDebtId);
+    });
+  }
+
+  /** Marca saldada (o no) una deuda y su copia según lo abonado. */
+  private async settle(db: Prisma.TransactionClient, ...ids: (string | null)[]) {
+    for (const id of ids) {
+      if (!id) continue;
+      const d = await db.debt.findUnique({ where: { id }, include: { payments: { select: { amount: true, date: true }, orderBy: { date: 'desc' } } } });
+      if (!d) continue;
+      const paid = d.payments.reduce((a, p) => a.add(p.amount), new D(0));
+      await db.debt.update({ where: { id }, data: { settledAt: paid.gte(d.amount) ? (d.settledAt ?? d.payments[0]?.date ?? new Date()) : null } });
+    }
   }
 
   async processDueSafe(userId?: string) {
@@ -418,6 +524,9 @@ class InstallmentsController {
   @Patch('installment-plans/:id') update(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: UpdatePlanDto) { return this.svc.update(u.id, id, dto); }
   @Delete('installment-plans/:id') @HttpCode(204) remove(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.remove(u.id, id); }
   @Post('installments/:id/pay') pay(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: PayInstallmentDto) { return this.svc.pay(u.id, id, dto); }
+  @Patch('installment-plans/:id/my-account') myAccount(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: MyAccountDto) {
+    return this.svc.setMyAccount(u.id, id, dto);
+  }
   @Delete('installments/:id/pay') @HttpCode(204) unpay(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.unpay(u.id, id); }
 }
 

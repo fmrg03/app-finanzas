@@ -137,6 +137,7 @@ export function TransactionForm({
       : null;
 
   const paidByOther = sharedOn && split.paidBy !== null;
+  const [myAccountId, setMyAccountId] = useState('');
   // Pagó un familiar que usa la app: se le envía para que la confirme
   const linkedPayer = !tx && paidByOther ? people.find((p) => p.id === split.paidBy && p.linkedUserId) : undefined;
   const totalUsd = amountNum > 0 && (s.currency === 'USD' || effRate > 0) ? (s.currency === 'USD' ? amountNum : amountNum / effRate) : null;
@@ -165,6 +166,7 @@ export function TransactionForm({
             ...(inst.downMode === 'PERCENT' ? { downPaymentPct: normAmount(inst.down) || '0' } : { downPaymentUsd: normAmount(inst.down) || '0' }),
             count: Number(inst.count), frequency: inst.frequency, ...(inst.firstDue ? { firstDueDate: inst.firstDue } : {}),
             accountId: paidByOther ? null : s.accountId, ...(sharedOn ? { split: splitToApi(split) } : {}),
+            ...(paidByOther && myAccountId ? { myAccountId } : {}),
           },
         });
         invalidate();
@@ -382,7 +384,14 @@ export function TransactionForm({
             )}
           </Select>
         </Field>
-        {paidByOther || (locked && !tx?.accountId) ? (
+        {paidByOther && cuotasOn && !tx ? (
+          <Field label="Tu parte sale de" hint="Tu parte de la inicial y de cada cuota, a BCV si es en Bs; abona tu deuda">
+            <Select value={myAccountId} onChange={(e) => setMyAccountId(e.target.value)}>
+              <option value="">Elegir después</option>
+              {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </Select>
+          </Field>
+        ) : paidByOther || (locked && !tx?.accountId) ? (
           <div className="flex flex-col gap-1.5">
             <span className="text-sm font-medium">Cuenta</span>
             <p className="flex h-10 items-center rounded-lg bg-canvas px-3 text-sm text-muted">No sale de tus cuentas</p>

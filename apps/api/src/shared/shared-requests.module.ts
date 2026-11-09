@@ -68,9 +68,12 @@ export class SharedRequestsService {
     if (!payer || payer.disabledAt) throw new BadRequestException(`${payerPerson.name} no usa la app: registra la compra directamente`);
     if (!split.participants.some((p) => p.personId === null)) throw new BadRequestException('Si pagó otra persona, agrega tu parte');
 
+    const myAccountId = (dto as CreatePlanDto).myAccountId;
+    if (kind === 'INSTALLMENTS' && myAccountId) await this.transactions.assertAccount(userId, myAccountId);
     const category = await this.transactions.assertCategory(userId, dto.categoryId ?? null, 'EXPENSE');
     const total = await this.transactions.snapshot(userId, {
-      currency: dto.currency, amount: dto.amount, date: dto.date, rateSource: dto.rateSource ?? category?.defaultRateSource ?? undefined, rate: dto.rate,
+      currency: dto.currency, amount: dto.amount, date: dto.date, rate: dto.rate,
+      rateSource: dto.rate ? undefined : (dto.rateSource ?? (kind === 'INSTALLMENTS' ? 'BCV' : category?.defaultRateSource ?? undefined)),
     });
     // Mismo cálculo que hará la cuenta de quien pagó (valida porcentajes y montos)
     const result = computeSplit({ totalUsd: total.amountUsd, totalOriginal: total.originalAmount, mode: split.mode, paidByPersonId: split.paidByPersonId, participants: split.participants });
@@ -136,7 +139,7 @@ export class SharedRequestsService {
     try {
       const split = await this.translate(req.fromUser, userId, payload.split);
       const categoryId = dto.categoryId !== undefined ? dto.categoryId : await this.sameCategory(userId, preview.categoryName);
-      const { tags: _t, ...rest } = payload as CreateSharedTxDto & CreatePlanDto & { tags?: string[] };
+      const { tags: _t, myAccountId: _m, ...rest } = payload as CreateSharedTxDto & CreatePlanDto & { tags?: string[] };
       const body = { ...rest, split, categoryId, accountId: dto.accountId ?? null };
       if (req.kind === 'INSTALLMENTS') {
         const plan = await this.installments.create(userId, body as CreatePlanDto);
@@ -148,6 +151,12 @@ export class SharedRequestsService {
     } catch (e) {
       await this.prisma.sharedRequest.updateMany({ where: { id }, data: { claimedAt: null } });
       throw e;
+    }
+
+    // En cuotas: la parte de quien la mandó sale de la cuenta que eligió al registrarla
+    if (req.kind === 'INSTALLMENTS' && payload.myAccountId && sharedId) {
+      const mine = await this.prisma.installmentPlan.findFirst({ where: { userId: req.fromUserId, shared: { mirrorOfId: sharedId } } });
+      if (mine) await this.installments.setMyAccount(req.fromUserId, mine.id, { accountId: payload.myAccountId }).catch(() => undefined);
     }
 
     await this.prisma.$transaction(async (db) => {

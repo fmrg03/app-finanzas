@@ -109,6 +109,9 @@ export interface InstallmentPlan {
   categoryId: string | null;
   category: { id: string; name: string; color: string } | null;
   account: { id: string; name: string; currency: Currency } | null;
+  /** Compra que pagó otra persona: cuenta de la que sale tu parte */
+  myAccountId?: string | null;
+  myAccount?: { id: string; name: string; currency: Currency } | null;
   purchaseDate: string;
   totalUsd: string;
   downPaymentUsd: string;
