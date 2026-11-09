@@ -20,7 +20,7 @@ import { SharedModule, SharedService, SplitDto } from '../shared/shared.module';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { myShare, TransactionsService } from '../transactions/transactions.service';
 
-class CreatePlanDto {
+export class CreatePlanDto {
   @ApiProperty({ example: 'Cashea' }) @IsString() @MinLength(1) @MaxLength(40)
   provider: string;
 

@@ -81,7 +81,7 @@ export function TransactionForm({
   );
   const [cuotasOn, setCuotasOn] = useState(startWith === 'cuotas');
   const [inst, setInst] = useState<InstallmentState>(emptyInstallments);
-  const [done, setDone] = useState<{ kind: 'tx'; tx: Transaction } | { kind: 'plan'; plan: InstallmentPlan } | null>(null);
+  const [done, setDone] = useState<{ kind: 'tx'; tx: Transaction } | { kind: 'plan'; plan: InstallmentPlan } | { kind: 'request'; to: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const invalidate = useInvalidateMoney();
   const { data: people = [] } = usePeople();
@@ -137,6 +137,8 @@ export function TransactionForm({
       : null;
 
   const paidByOther = sharedOn && split.paidBy !== null;
+  // Pagó un familiar que usa la app: se le envía para que la confirme
+  const linkedPayer = !tx && paidByOther ? people.find((p) => p.id === split.paidBy && p.linkedUserId) : undefined;
   const totalUsd = amountNum > 0 && (s.currency === 'USD' || effRate > 0) ? (s.currency === 'USD' ? amountNum : amountNum / effRate) : null;
   const myPct = sharedOn && amountNum > 0
     ? ((previewParts(split, amountNum)[split.rows.findIndex((r) => !r.personId)] ?? 0) / amountNum) * 100
@@ -147,7 +149,7 @@ export function TransactionForm({
     const rateFields = { rateSource: s.rateSource, ...(s.rateSource === 'MANUAL' ? { rate: normAmount(s.manualRate) } : {}) };
     const base = { categoryId: s.categoryId || null, date: s.date, currency: s.currency, amount, ...rateFields };
     if (sharedOn) {
-      const problem = splitProblem(split, Number(amount), people);
+      const problem = splitProblem(split, Number(amount), people, !!tx);
       if (problem) return setError(problem);
     }
     setBusy(true);
@@ -156,7 +158,7 @@ export function TransactionForm({
         const pv = installmentPreview(totalUsd, s.date, inst);
         if (!s.description.trim()) return setError('Escribe qué compraste');
         if (!pv || pv.invalid) return setError('Revisa la inicial y las cuotas');
-        const plan = await api<InstallmentPlan>('/installment-plans', {
+        const plan = await api<InstallmentPlan>(linkedPayer ? '/shared-requests/installments' : '/installment-plans', {
           method: 'POST',
           json: {
             ...base, provider: inst.provider.trim() || 'Cashea', store: inst.store.trim() || undefined, description: s.description.trim(),
@@ -166,11 +168,17 @@ export function TransactionForm({
           },
         });
         invalidate();
-        if (plan.shared) setDone({ kind: 'plan', plan });
+        if (linkedPayer) setDone({ kind: 'request', to: linkedPayer.name });
+        else if (plan.shared) setDone({ kind: 'plan', plan });
         else onDone();
         return;
       }
       const body = { ...base, accountId: paidByOther ? null : s.accountId, description: s.description, tags: parseTags(s.tags), split: splitToApi(split) };
+      if (linkedPayer) {
+        await api('/shared-requests/purchase', { method: 'POST', json: body });
+        invalidate();
+        return setDone({ kind: 'request', to: linkedPayer.name });
+      }
       const saved = await api<Transaction>(tx ? `/shared-expenses/${tx.id}` : '/shared-expenses', { method: tx ? 'PUT' : 'POST', json: body });
       invalidate();
       setDone({ kind: 'tx', tx: saved });
@@ -245,6 +253,18 @@ export function TransactionForm({
     return <p className="text-sm text-muted">Primero crea una cuenta (efectivo, banco…) en la sección Cuentas.</p>;
   }
 
+  if (done?.kind === 'request') {
+    return (
+      <div className="flex flex-col gap-4">
+        <p className="flex items-center gap-2 font-semibold"><CheckCircle2 size={20} className="text-income" /> Enviada a {done.to}</p>
+        <p className="text-sm text-muted">
+          Le llegó para que la confirme. Cuando la acepte, te aparece en tus movimientos con tu deuda con {done.to}; si la rechaza, te avisamos.
+          Mientras tanto la ves en Resumen como pendiente.
+        </p>
+        <Button onClick={onDone} className="self-end">Listo</Button>
+      </div>
+    );
+  }
   if (done) return <SavedShare done={done} onClose={onDone} />;
 
   // Al editar, solo un compartido muestra su reparto; un movimiento normal no se convierte en compartido
@@ -340,7 +360,7 @@ export function TransactionForm({
         </div>
       )}
       {canSpecial && sharedOn && (
-        <SplitEditor value={split} onChange={setSplit} total={amountNum > 0 ? amountNum : 0} currency={s.currency} rate={s.currency === 'USD' ? null : effRate || null} />
+        <SplitEditor value={split} onChange={setSplit} total={amountNum > 0 ? amountNum : 0} currency={s.currency} rate={s.currency === 'USD' ? null : effRate || null} editing={!!tx} />
       )}
       {canSpecial && cuotasOn && (
         <InstallmentEditor value={inst} onChange={setInst} totalUsd={totalUsd} purchaseDate={s.date} myPct={sharedOn ? myPct : null} paidByOther={paidByOther} />
@@ -410,7 +430,7 @@ export function TransactionForm({
           <Button type="button" variant="danger" onClick={onDelete} disabled={del.isPending}>{tx.installment ? 'Deshacer pago' : 'Eliminar'}</Button>
         )}
         <Button type="submit" disabled={save.isPending || busy} className="ml-auto">
-          {save.isPending || busy ? 'Guardando…' : tx ? 'Guardar cambios' : cuotasOn ? 'Guardar compra' : 'Guardar movimiento'}
+          {save.isPending || busy ? 'Guardando…' : tx ? 'Guardar cambios' : linkedPayer ? `Enviar a ${linkedPayer.name}` : cuotasOn ? 'Guardar compra' : 'Guardar movimiento'}
         </Button>
       </div>
     </form>

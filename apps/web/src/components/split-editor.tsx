@@ -51,9 +51,9 @@ export function previewParts(s: SplitState, total: number) {
 }
 
 /** Devuelve un mensaje si el reparto no cuadra, o null si está bien. */
-export function splitProblem(s: SplitState, total: number, people: Person[] = []): string | null {
+export function splitProblem(s: SplitState, total: number, people: Person[] = [], editing = false): string | null {
   const payer = s.paidBy ? people.find((p) => p.id === s.paidBy) : null;
-  if (payer?.linkedUserId) return `${payer.name} usa la app: pídele que registre la compra desde su cuenta incluyéndote, y te aparecerá automáticamente.`;
+  if (payer?.linkedUserId && editing) return `${payer.name} usa la app: para que conste que pagó, elimina esta compra y regístrala de nuevo; se la enviaremos para que la confirme.`;
   const parts = previewParts(s, total);
   if (s.paidBy === null && !s.rows.some((r, i) => r.personId && parts[i] > 0)) return 'Agrega al menos a una persona con la que compartes';
   if (s.paidBy !== null && !s.rows.some((r, i) => !r.personId && parts[i] > 0)) return 'Si pagó otra persona, agrega tu parte';
@@ -69,13 +69,14 @@ export function splitProblem(s: SplitState, total: number, people: Person[] = []
 }
 
 export function SplitEditor({
-  value, onChange, total, currency, rate,
-}: { value: SplitState; onChange: (s: SplitState) => void; total: number; currency: Currency; rate: number | null }) {
+  value, onChange, total, currency, rate, editing = false,
+}: { value: SplitState; onChange: (s: SplitState) => void; total: number; currency: Currency; rate: number | null; editing?: boolean }) {
   const { data: people = [] } = usePeople();
   const nameOf = (id: string | null) => (id ? (people.find((p) => p.id === id)?.name ?? '…') : 'Yo');
   const set = (patch: Partial<SplitState>) => onChange({ ...value, ...patch });
   const parts = previewParts(value, total);
-  const problem = total > 0 || value.paidBy ? splitProblem(value, total, people) : null;
+  const problem = total > 0 || value.paidBy ? splitProblem(value, total, people, editing) : null;
+  const linkedPayer = !editing && value.paidBy ? people.find((p) => p.id === value.paidBy && p.linkedUserId) : undefined;
   const linked = (id: string | null) => !!id && !!people.find((p) => p.id === id)?.linkedUserId;
   const inUsd = (v: number) => (currency === 'USD' ? v : rate ? v / rate : null);
   const fmt = (v: number) => money(v, currency);
@@ -182,6 +183,11 @@ export function SplitEditor({
           <p className="mt-1 text-xs text-muted">Las deudas quedan en USD con la tasa del día, así no pierden valor.</p>
         </div>
       ) : null}
+      {linkedPayer && !problem && (
+        <p className="rounded-lg bg-accent-soft/70 px-3 py-2 text-sm text-accent">
+          {linkedPayer.name} usa la app: le enviaremos la compra para que la confirme y elija de qué cuenta salió. Cuando la acepte, te aparece con tu deuda; si la rechaza, te avisamos.
+        </p>
+      )}
     </div>
   );
 }

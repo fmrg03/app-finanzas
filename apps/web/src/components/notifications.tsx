@@ -22,6 +22,9 @@ const META: Record<NotificationType, { icon: typeof Bell; tone: string }> = {
   FAMILY_JOINED: { icon: UserPlus, tone: 'bg-income-soft text-income' },
   RESERVE_DUE: { icon: PiggyBank, tone: 'bg-accent-soft text-accent' },
   RESERVE_SHORT: { icon: PiggyBank, tone: 'bg-warning-soft text-warning' },
+  SHARED_REQUEST: { icon: Users, tone: 'bg-accent-soft text-accent' },
+  SHARED_REQUEST_ACCEPTED: { icon: Users, tone: 'bg-income-soft text-income' },
+  SHARED_REQUEST_REJECTED: { icon: Users, tone: 'bg-expense-soft text-expense' },
 };
 
 function TypeIcon({ type, size = 16 }: { type: NotificationType; size?: number }) {

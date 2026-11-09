@@ -73,6 +73,36 @@ enum NotificationType {
   FAMILY_JOINED
   RESERVE_DUE
   RESERVE_SHORT
+  SHARED_REQUEST
+  SHARED_REQUEST_ACCEPTED
+  SHARED_REQUEST_REJECTED
+}
+
+enum SharedRequestKind {
+  PURCHASE
+  INSTALLMENTS
+}
+
+// Compra compartida que pagó otro familiar: queda pendiente hasta que él la acepte o la rechace.
+// Mientras tanto no se registra nada; al responder, la fila se borra.
+model SharedRequest {
+  id         String            @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  kind       SharedRequestKind
+  // Lo que escribió quien la registró, tal como lo mandó (con sus personas)
+  payload    Json
+  // Resumen para mostrar: concepto, monto, partes de cada uno
+  preview    Json
+  // Se marca al empezar a aceptarla, para que no se acepte dos veces
+  claimedAt  DateTime?
+  createdAt  DateTime          @default(now())
+
+  fromUser User @relation("SharedRequestsSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser   User @relation("SharedRequestsReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@index([toUserId])
+  @@index([fromUserId])
 }
 
 enum UserRole {
@@ -139,6 +169,8 @@ model User {
   invitationsSent  Invitation[]      @relation("InvitationCreator")
   invitationsFor   Invitation[]      @relation("InvitationTarget")
   linkedPersons    Person[]          @relation("PersonLinkedUser")
+  sharedRequestsSent     SharedRequest[] @relation("SharedRequestsSent")
+  sharedRequestsReceived SharedRequest[] @relation("SharedRequestsReceived")
 }
 
 model Account {

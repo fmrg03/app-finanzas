@@ -384,3 +384,22 @@ export interface AccountSummary {
   closing: string;
   current: string;
 }
+
+/** Compra compartida que pagó un familiar, esperando que la acepte o la rechace. */
+export interface SharedRequest {
+  id: string;
+  kind: 'PURCHASE' | 'INSTALLMENTS';
+  /** true: te la mandaron a ti (pagaste tú) */
+  incoming: boolean;
+  from: { id: string; name: string } | null;
+  to: { id: string; name: string } | null;
+  createdAt: string;
+  description: string | null;
+  categoryName: string | null;
+  date: string;
+  currency: Currency;
+  amount: string;
+  totalUsd: string;
+  installments: { provider: string; store: string | null; count: number; frequency: string; downPaymentUsd: string } | null;
+  parts: { role: 'CREATOR' | 'PAYER' | 'OTHER'; name: string; amountUsd: string; pct: string; me: boolean }[];
+}

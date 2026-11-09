@@ -77,7 +77,7 @@ export interface TxInput {
 export function useInvalidateMoney() {
   const qc = useQueryClient();
   return () => {
-    for (const k of ['transactions', 'accounts', 'budgets', 'net-worth', 'recurring', 'notifications', 'debts', 'people', 'installments', 'projection']) qc.invalidateQueries({ queryKey: [k] });
+    for (const k of ['transactions', 'accounts', 'budgets', 'net-worth', 'recurring', 'notifications', 'debts', 'people', 'installments', 'projection', 'shared-requests']) qc.invalidateQueries({ queryKey: [k] });
   };
 }
 

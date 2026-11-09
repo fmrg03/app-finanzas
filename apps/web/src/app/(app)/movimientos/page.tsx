@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import { AmountPair } from '@/components/amount';
 import { DueRecurring } from '@/components/due-recurring';
+import { SharedRequests } from '@/components/shared-requests';
 import { MonthNav, useMonth } from '@/components/month-nav';
 import { TransactionForm } from '@/components/transaction-form';
 import { TransferForm } from '@/components/transfer-form';
@@ -126,6 +127,7 @@ export default function MovimientosPage() {
         </p>
       )}
 
+      <SharedRequests />
       <DueRecurring />
 
       <section aria-label="Filtros" className="mt-6 grid grid-cols-2 gap-2 sm:grid-cols-4">

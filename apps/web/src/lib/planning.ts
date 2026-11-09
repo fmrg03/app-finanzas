@@ -2,13 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from './api';
-import type { BudgetStatus, Debt, DebtPaymentItem, Goal, InstallmentPlan, Member, NetWorth, PendingInvitation, Person, Projection, Recurring, Transfer, UpcomingInstallments } from './types';
+import type { BudgetStatus, Debt, DebtPaymentItem, Goal, InstallmentPlan, Member, NetWorth, PendingInvitation, Person, Projection, Recurring, SharedRequest, Transfer, UpcomingInstallments } from './types';
 
 /** Todo lo que cambia saldos o totales: se refresca junto. */
 function useInvalidateAll() {
   const qc = useQueryClient();
   return () => {
-    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications', 'debts', 'people', 'installments', 'family', 'projection']) qc.invalidateQueries({ queryKey: [k] });
+    for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications', 'debts', 'people', 'installments', 'family', 'projection', 'shared-requests']) qc.invalidateQueries({ queryKey: [k] });
   };
 }
 
@@ -51,3 +51,10 @@ export const usePendingInvitations = (enabled: boolean) =>
   useQuery({ queryKey: ['family', 'invitations'], queryFn: () => api<PendingInvitation[]>('/family/invitations'), enabled });
 export const useDebtPayments = (from?: string, to?: string) =>
   useQuery({ queryKey: ['debts', 'payments', from, to], queryFn: () => api<DebtPaymentItem[]>(`/debts/payments?from=${from ?? ''}&to=${to ?? ''}`) });
+
+export const useSharedRequests = () =>
+  useQuery({
+    queryKey: ['shared-requests'],
+    queryFn: () => api<{ incoming: SharedRequest[]; outgoing: SharedRequest[] }>('/shared-requests'),
+    refetchInterval: 60_000,
+  });

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useState } from 'react';
 import { CHART, LegendItem, MonthlyBars, MonthlyTable, PaceChart } from '@/components/charts';
 import { DueRecurring } from '@/components/due-recurring';
+import { SharedRequests } from '@/components/shared-requests';
 import { UpcomingInstallments } from '@/components/upcoming-installments';
 import { ProjectionCard } from '@/components/projection-card';
 import { budgetTone, Progress } from '@/components/progress';
@@ -43,6 +44,7 @@ export default function ResumenPage() {
         </div>
       </header>
 
+      <SharedRequests />
       <DueRecurring />
       {nav.isCurrent && <UpcomingInstallments />}
 
