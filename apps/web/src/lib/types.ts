@@ -395,7 +395,7 @@ export interface SharedRequest {
   /** Es un cambio propuesto a una compra ya registrada */
   change: boolean;
   /** Si es un cambio: cómo está ahora */
-  before: { description: string | null; date: string; currency: Currency; amount: string; totalUsd: string; parts: SharedRequest['parts'] } | null;
+  before: { description: string | null; date: string; currency: Currency; amount: string; totalUsd: string; parts: SharedRequest['parts']; installments?: SharedRequest['installments'] } | null;
   /** true: te la mandaron a ti (pagaste tú) */
   incoming: boolean;
   from: { id: string; name: string } | null;

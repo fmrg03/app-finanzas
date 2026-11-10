@@ -91,6 +91,18 @@ function ChangeSummary({ r }: { r: SharedRequest }) {
         <span className="text-muted">Fecha</span>
         <span className="text-right text-muted">{dayLabel(b.date)}</span>
         <span className={cn('text-right', b.date !== r.date && 'font-semibold text-accent')}>{dayLabel(r.date)}</span>
+        {b.installments && r.installments && (
+          <>
+            <span className="text-muted">Inicial</span>
+            <span className="text-right text-muted">{money(b.installments.downPaymentUsd, 'USD')}</span>
+            <span className={cn('text-right', b.installments.downPaymentUsd !== r.installments.downPaymentUsd && 'font-semibold text-accent')}>{money(r.installments.downPaymentUsd, 'USD')}</span>
+            <span className="text-muted">Cuotas</span>
+            <span className="text-right text-muted">{b.installments.count} {FREQ[b.installments.frequency] ?? ''}</span>
+            <span className={cn('text-right', (b.installments.count !== r.installments.count || b.installments.frequency !== r.installments.frequency) && 'font-semibold text-accent')}>
+              {r.installments.count} {FREQ[r.installments.frequency] ?? ''}
+            </span>
+          </>
+        )}
         {names.map((k) => {
           const x = find(b.parts, k); const y = find(r.parts, k);
           const label = (y ?? x)!;

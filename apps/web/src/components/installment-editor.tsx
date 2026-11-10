@@ -119,7 +119,7 @@ export function InstallmentEditor({
               </ol>
               <p className="mt-1 text-xs text-muted">
                 {paidByOther
-                  ? 'Tu parte de cada cuota se registra sola como gasto en su fecha; tus cuentas no se tocan.'
+                  ? 'Tu parte de cada cuota se registra cuando quien pagó la marca pagada (o al vencer), desde la cuenta que elijas abajo.'
                   : `Cada cuota cuenta como gasto el día que la pagues${myPct !== null ? ' (solo tu parte)' : ''}.`}
               </p>
             </>

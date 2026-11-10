@@ -49,8 +49,12 @@ const parseTags = (s: string) => s.split(',').map((t) => t.trim()).filter(Boolea
 const normAmount = (s: string) => s.trim().replace(/\s/g, '').replace(',', '.');
 
 export function TransactionForm({
-  tx, onDone, onTransfer, initialType, startWith,
-}: { tx?: Transaction; onDone: () => void; onTransfer?: () => void; initialType?: TxType; startWith?: 'cuotas' | 'shared' }) {
+  tx, onDone, onTransfer, initialType, startWith, proposePlan,
+}: {
+  tx?: Transaction; onDone: () => void; onTransfer?: () => void; initialType?: TxType; startWith?: 'cuotas' | 'shared';
+  /** Copia de una compra en cuotas de un familiar: se abre para proponerle un cambio */
+  proposePlan?: { id: string; payerName: string };
+}) {
   const { data: me } = useMe();
   const { data: accounts = [] } = useAccounts();
   const { data: categories = [] } = useCategories();
@@ -75,7 +79,7 @@ export function TransactionForm({
   const isShared = !!tx?.shared;
   // Inicial de una compra en cuotas, o cuota que se registró sola: los montos los define la compra
   // Copia de una compra de un familiar en modo "proponer cambio": se edita como si fuera nueva y se le envía
-  const [proposing, setProposing] = useState(false);
+  const [proposing, setProposing] = useState(!!proposePlan);
   const [loadingDraft, setLoadingDraft] = useState(false);
   const locked = !proposing && ((!!tx?.installmentPlanId && (!tx.installment || !tx.accountId)) || !!tx?.shared?.mirrorOf || !!tx?.debtPayment);
   const [sharedOn, setSharedOn] = useState(isShared || startWith === 'shared');
@@ -91,7 +95,7 @@ export function TransactionForm({
   // Copia de una compra que registró un familiar: solo se cambian categoría, descripción y etiquetas
   const mirrorBy = tx?.shared?.mirrorOf ? (tx.shared.mirrorOf.user.name ?? tx.shared.paidBy?.name ?? 'un familiar') : null;
   // Si los datos base llegan tarde se aplican, salvo que ya se haya leído una factura
-  useEffect(() => { if (!receipt) setS(initial); }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!receipt && !proposePlan) setS(initial); }, [initial]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyReceipt(r: ReceiptRead) {
     const g = r.suggestion;
@@ -144,6 +148,34 @@ export function TransactionForm({
   // Pagó un familiar que usa la app: se le envía para que la confirme
   const linkedPayer = (!tx || proposing) && paidByOther ? people.find((p) => p.id === split.paidBy && p.linkedUserId) : undefined;
 
+  // Compra en cuotas: se carga completa (total, inicial, cuotas, reparto y tu cuenta) para proponer el cambio
+  useEffect(() => {
+    if (!proposePlan) return;
+    setLoadingDraft(true);
+    api<{
+      provider: string; store: string | null; description: string; date: string; amount: string; downPaymentUsd: string; count: number;
+      frequency: InstallmentState['frequency']; firstDueDate: string | null; myAccountId: string | null;
+      split: { paidByPersonId: string; mode: SplitState['mode']; participants: { personId: string | null; value?: string }[] };
+    }>('/shared-requests/change-plan-draft', { method: 'POST', json: { planId: proposePlan.id } })
+      .then((d) => {
+        setS((p) => ({ ...p, type: 'EXPENSE', date: d.date, currency: 'USD', amount: String(Number(d.amount)).replace('.', ','), description: d.description, rateSource: 'BCV' }));
+        setInst({
+          provider: d.provider, store: d.store ?? '', downMode: 'USD', down: String(Number(d.downPaymentUsd)).replace('.', ','),
+          count: String(d.count), frequency: d.frequency, firstDue: d.firstDueDate ?? '',
+        });
+        setSplit({
+          paidBy: d.split.paidByPersonId, mode: d.split.mode,
+          rows: d.split.participants.map((x) => ({ personId: x.personId, value: x.value ? String(Number(x.value)).replace('.', ',') : '' })),
+        });
+        setMyAccountId(d.myAccountId ?? '');
+        setRateTouched(true);
+        setSharedOn(true);
+        setCuotasOn(true);
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoadingDraft(false));
+  }, [proposePlan?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /** Carga la compra completa (con el reparto de quien pagó) para proponer un cambio. */
   async function startProposal() {
     if (!tx) return;
@@ -182,7 +214,7 @@ export function TransactionForm({
       if (problem) return setError(problem);
     }
     setBusy(true);
-    if (proposing && tx) {
+    if (proposing && tx && !proposePlan) {
       try {
         await api('/shared-requests/change', {
           method: 'POST',
@@ -201,9 +233,10 @@ export function TransactionForm({
         const pv = installmentPreview(totalUsd, s.date, inst);
         if (!s.description.trim()) return setError('Escribe qué compraste');
         if (!pv || pv.invalid) return setError('Revisa la inicial y las cuotas');
-        const plan = await api<InstallmentPlan>(linkedPayer ? '/shared-requests/installments' : '/installment-plans', {
+        const plan = await api<InstallmentPlan>(proposePlan ? '/shared-requests/change-plan' : linkedPayer ? '/shared-requests/installments' : '/installment-plans', {
           method: 'POST',
           json: {
+            ...(proposePlan ? { planId: proposePlan.id } : {}),
             ...base, provider: inst.provider.trim() || 'Cashea', store: inst.store.trim() || undefined, description: s.description.trim(),
             ...(inst.downMode === 'PERCENT' ? { downPaymentPct: normAmount(inst.down) || '0' } : { downPaymentUsd: normAmount(inst.down) || '0' }),
             count: Number(inst.count), frequency: inst.frequency, ...(inst.firstDue ? { firstDueDate: inst.firstDue } : {}),
@@ -212,7 +245,8 @@ export function TransactionForm({
           },
         });
         invalidate();
-        if (linkedPayer) setDone({ kind: 'request', to: linkedPayer.name });
+        if (proposePlan) setDone({ kind: 'request', to: proposePlan.payerName, change: true });
+        else if (linkedPayer) setDone({ kind: 'request', to: linkedPayer.name });
         else if (plan.shared) setDone({ kind: 'plan', plan });
         else onDone();
         return;
@@ -337,6 +371,16 @@ export function TransactionForm({
           <p>
             Es el abono {tx.debtPayment.debt.direction === 'I_OWE' ? 'a' : 'de'} <strong>{tx.debtPayment.debt.person}</strong>. Aquí puedes cambiar categoría, descripción y etiquetas;
             si lo eliminas, también se deshace el abono en <Link href="/deudas" className="font-semibold text-accent hover:underline">Deudas</Link>.
+          </p>
+        </div>
+      )}
+      {proposePlan && (
+        <div className="flex items-start gap-2 rounded-xl bg-accent-soft p-3 text-sm">
+          <Users size={18} className="mt-0.5 shrink-0 text-accent" />
+          <p>
+            {loadingDraft ? 'Cargando la compra…' : (
+              <>Cambia lo que haga falta (total, inicial, cuotas, reparto) y envíalo: le llega a <strong>{proposePlan.payerName}</strong> para que lo acepte. Si lo acepta, la compra se rehace en las dos cuentas; si lo rechaza, queda como estaba.</>
+            )}
           </p>
         </div>
       )}
@@ -493,7 +537,7 @@ export function TransactionForm({
           <Button type="button" variant="danger" onClick={onDelete} disabled={del.isPending}>{tx.installment ? 'Deshacer pago' : 'Eliminar'}</Button>
         )}
         <Button type="submit" disabled={save.isPending || busy} className="ml-auto">
-          {save.isPending || busy ? 'Guardando…' : proposing ? `Enviar cambio a ${mirrorBy}` : tx ? 'Guardar cambios' : linkedPayer ? `Enviar a ${linkedPayer.name}` : cuotasOn ? 'Guardar compra' : 'Guardar movimiento'}
+          {save.isPending || busy ? 'Guardando…' : proposing ? `Enviar cambio a ${mirrorBy ?? proposePlan?.payerName}` : tx ? 'Guardar cambios' : linkedPayer ? `Enviar a ${linkedPayer.name}` : cuotasOn ? 'Guardar compra' : 'Guardar movimiento'}
         </Button>
       </div>
     </form>

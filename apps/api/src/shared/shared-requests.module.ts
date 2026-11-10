@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { TransactionsModule } from '../transactions/transactions.module';
 import { TransactionsService } from '../transactions/transactions.service';
 import { CreateSharedTxDto, SharedModule, SharedService, SplitDto } from './shared.module';
+import { deleteMirrorsOf } from './mirror-cleanup';
 import { computeSplit } from './split';
 
 class AcceptDto {
@@ -28,6 +29,14 @@ class ChangeDraftDto {
 
 class ProposeChangeDto extends CreateSharedTxDto {
   @IsString() txId!: string;
+}
+
+class PlanDraftDto {
+  @IsString() planId!: string;
+}
+
+class ProposePlanChangeDto extends CreatePlanDto {
+  @IsString() planId!: string;
 }
 
 class RejectDto {
@@ -49,7 +58,7 @@ interface Preview {
   installments: { provider: string; store: string | null; count: number; frequency: string; downPaymentUsd: string } | null;
   parts: PreviewPart[];
   /** Si es un cambio: cómo está ahora la compra */
-  before?: Pick<Preview, 'description' | 'date' | 'currency' | 'amount' | 'totalUsd' | 'parts'> | null;
+  before?: Pick<Preview, 'description' | 'date' | 'currency' | 'amount' | 'totalUsd' | 'parts'> & { installments?: Preview['installments'] } | null;
 }
 
 const fmt = (v: Prisma.Decimal.Value, cur: 'USD' | 'VES') =>
@@ -110,12 +119,12 @@ export class SharedRequestsService {
     };
 
     if (change) {
-      preview.before = await this.current(change.targetSharedId, userId);
+      preview.before = kind === 'INSTALLMENTS' ? await this.currentPlan(change.targetSharedId, userId) : await this.current(change.targetSharedId, userId);
       // Un cambio nuevo reemplaza al anterior que no habían respondido
       const old = await this.prisma.sharedRequest.findMany({ where: { fromUserId: userId, targetSharedId: change.targetSharedId, claimedAt: null } });
       for (const o of old) await this.cancel(userId, o.id);
     }
-    const { accountId: _a, txId: _tx, ...payload } = dto as CreateSharedTxDto & CreatePlanDto & { txId?: string };
+    const { accountId: _a, txId: _tx, planId: _p, ...payload } = dto as CreateSharedTxDto & CreatePlanDto & { txId?: string; planId?: string };
     const req = await this.prisma.sharedRequest.create({
       data: {
         fromUserId: userId, toUserId: payer.id, kind, targetSharedId: change?.targetSharedId ?? null,
@@ -177,6 +186,134 @@ export class SharedRequestsService {
     // La categoría es tuya y se cambia en tu copia; no viaja en la propuesta
     const mine = await this.prisma.transaction.findFirst({ where: { id: dto.txId, userId }, select: { categoryId: true } });
     return this.create(userId, 'PURCHASE', { ...dto, categoryId: mine?.categoryId ?? null }, { targetSharedId: target.id, payerId: payer.id });
+  }
+
+  /** Tu copia de una compra en cuotas que pagó un familiar, como para editarla (punto de partida del cambio). */
+  async planDraft(userId: string, planId: string) {
+    const { target, plan, payer } = await this.planTargetOf(userId, planId);
+    const mine = await this.prisma.installmentPlan.findUniqueOrThrow({ where: { id: planId } });
+    const split = await this.splitFor(userId, payer, target, target.totalUsd);
+    return {
+      planId, provider: plan.provider, store: plan.store, description: plan.description,
+      date: plan.purchaseDate.toISOString().slice(0, 10), currency: 'USD', amount: plan.totalUsd.toFixed(2),
+      downPaymentUsd: plan.downPaymentUsd.toFixed(2), count: plan.count, frequency: plan.frequency,
+      firstDueDate: plan.installments[0]?.dueDate.toISOString().slice(0, 10) ?? null,
+      myAccountId: mine.myAccountId, split,
+    };
+  }
+
+  /** Propones un cambio a una compra en cuotas que pagó un familiar; al aceptarlo, la compra se rehace. */
+  async proposePlanChange(userId: string, dto: ProposePlanChangeDto) {
+    const { target, plan, payer } = await this.planTargetOf(userId, dto.planId);
+    await this.assertPlanEditable(plan.id, target.id);
+    const mine = await this.prisma.installmentPlan.findUniqueOrThrow({ where: { id: dto.planId }, select: { categoryId: true } });
+    return this.create(userId, 'INSTALLMENTS', { ...dto, categoryId: mine.categoryId }, { targetSharedId: target.id, payerId: payer.id });
+  }
+
+  private async planTargetOf(userId: string, planId: string) {
+    const mine = await this.prisma.installmentPlan.findFirst({ where: { id: planId, userId }, include: { shared: { select: { mirrorOfId: true } } } });
+    if (!mine?.shared?.mirrorOfId) throw new NotFoundException('Esta compra no es una copia de la de un familiar');
+    const target = await this.prisma.sharedExpense.findUniqueOrThrow({
+      where: { id: mine.shared.mirrorOfId },
+      include: { participants: { include: { person: { include: { linkedUser: true } } } }, plan: { include: { installments: { orderBy: { n: 'asc' } } } }, user: true },
+    });
+    if (!target.plan) throw new BadRequestException('Esta compra no es en cuotas');
+    return { target, plan: target.plan, payer: target.user };
+  }
+
+  /**
+   * Una compra en cuotas se puede rehacer si no hay cuotas pagadas ni abonos hechos a mano
+   * (los abonos automáticos de la parte de cada uno se rehacen con ella).
+   */
+  private async assertPlanEditable(planId: string, sharedId: string) {
+    const paid = await this.prisma.installment.count({ where: { planId, transactionId: { not: null } } });
+    if (paid) throw new ConflictException('Ya hay cuotas pagadas: la compra ya no se puede cambiar así. Pídele a quien pagó que lo arregle con abonos o que la registre de nuevo.');
+    const manual = await this.prisma.debtPayment.findFirst({
+      where: {
+        debt: { OR: [{ sharedId }, { shared: { mirrorOfId: sharedId } }] },
+        transaction: { is: null },
+        mirrorOf: { is: null },
+      },
+    });
+    const manualMirror = await this.prisma.debtPayment.findFirst({
+      where: { debt: { OR: [{ sharedId }, { shared: { mirrorOfId: sharedId } }] }, mirrorOf: { is: { transactionId: null } } },
+    });
+    if (manual || manualMirror) throw new ConflictException('Ya hay abonos registrados en esta compra: no se puede cambiar así.');
+  }
+
+  /** El reparto de quien pagó, con las personas de quien lo va a editar. */
+  private async splitFor(
+    userId: string, payer: User,
+    target: Prisma.SharedExpenseGetPayload<{ include: { participants: { include: { person: { include: { linkedUser: true } } } } } }>,
+    totalOriginal: Prisma.Decimal,
+  ) {
+    const payerPerson = await this.people.ensureLinkedPerson(userId, payer);
+    const participants = [];
+    for (const p of target.participants) {
+      let personId: string | null;
+      if (p.personId === null) personId = payerPerson.id;
+      else if (p.person?.linkedUserId === userId) personId = null;
+      else if (p.person?.linkedUser) personId = (await this.people.ensureLinkedPerson(userId, p.person.linkedUser)).id;
+      else {
+        const same = await this.prisma.person.findFirst({ where: { userId, linkedUserId: null, name: { equals: p.person!.name, mode: 'insensitive' } } });
+        personId = same?.id ?? (await this.prisma.person.create({ data: { userId, name: p.person!.name, phone: p.person!.phone } })).id;
+      }
+      const value = target.splitMode === 'PERCENT' ? p.pct.toFixed(2)
+        : target.splitMode === 'AMOUNT' ? (target.totalUsd.isZero() ? '0' : p.amountUsd.div(target.totalUsd).mul(totalOriginal).toFixed(2))
+          : undefined;
+      participants.push({ personId, ...(value !== undefined ? { value } : {}) });
+    }
+    return { paidByPersonId: payerPerson.id, mode: target.splitMode, participants };
+  }
+
+  /** Cómo está ahora una compra en cuotas. */
+  private async currentPlan(sharedId: string, creatorId: string): Promise<NonNullable<Preview['before']>> {
+    const s = await this.prisma.sharedExpense.findUniqueOrThrow({
+      where: { id: sharedId },
+      include: { participants: { include: { person: true } }, plan: true, user: true },
+    });
+    const creator = await this.prisma.user.findUniqueOrThrow({ where: { id: creatorId } });
+    const p = s.plan!;
+    return {
+      description: p.description, date: p.purchaseDate.toISOString().slice(0, 10), currency: 'USD',
+      amount: p.totalUsd.toFixed(2), totalUsd: p.totalUsd.toFixed(2),
+      installments: { provider: p.provider, store: p.store, count: p.count, frequency: p.frequency, downPaymentUsd: p.downPaymentUsd.toFixed(2) },
+      parts: s.participants.map((x) => ({
+        role: x.personId === null ? 'PAYER' : x.person?.linkedUserId === creatorId ? 'CREATOR' : 'OTHER',
+        name: x.personId === null ? displayName(s.user) : x.person?.linkedUserId === creatorId ? displayName(creator) : x.person!.name,
+        amountUsd: x.amountUsd.toFixed(2), pct: x.pct.toFixed(2),
+      })),
+    };
+  }
+
+  /**
+   * Acepta el cambio de una compra en cuotas: se borra y se vuelve a crear con los datos nuevos, en la misma
+   * cuenta y categoría; cada familiar conserva la cuenta de la que sale su parte.
+   */
+  private async rebuildPlan(payerId: string, targetSharedId: string, body: CreatePlanDto, creatorId: string, creatorAccount?: string | null) {
+    const plan = await this.prisma.installmentPlan.findFirst({ where: { sharedId: targetSharedId, userId: payerId } });
+    if (!plan) throw new NotFoundException('La compra ya no existe');
+    await this.assertPlanEditable(plan.id, targetSharedId);
+    const keep = await this.prisma.installmentPlan.findMany({
+      where: { shared: { mirrorOfId: targetSharedId } }, select: { userId: true, myAccountId: true },
+    });
+    const accounts = new Map(keep.map((k) => [k.userId, k.myAccountId]));
+    if (creatorAccount !== undefined) accounts.set(creatorId, creatorAccount);
+    await this.prisma.$transaction(async (db) => {
+      await deleteMirrorsOf(db, targetSharedId);
+      await db.installmentPlan.delete({ where: { id: plan.id } });
+      await db.sharedExpense.delete({ where: { id: targetSharedId } });
+    });
+    const created = await this.installments.create(payerId, { ...body, accountId: plan.accountId, categoryId: plan.categoryId });
+    const sharedId = (created as { sharedId?: string | null }).sharedId ?? null;
+    if (sharedId) {
+      for (const [uid, acc] of accounts) {
+        if (!acc) continue;
+        const m = await this.prisma.installmentPlan.findFirst({ where: { userId: uid, shared: { mirrorOfId: sharedId } } });
+        if (m) await this.installments.setMyAccount(uid, m.id, { accountId: acc }).catch(() => undefined);
+      }
+    }
+    return sharedId;
   }
 
   /** El reparto original (de quien pagó) detrás de tu copia de una compra. */
@@ -241,7 +378,9 @@ export class SharedRequestsService {
       const categoryId = dto.categoryId !== undefined ? dto.categoryId : await this.sameCategory(userId, preview.categoryName);
       const { tags: _t, myAccountId: _m, ...rest } = payload as CreateSharedTxDto & CreatePlanDto & { tags?: string[] };
       const body = { ...rest, split, categoryId, accountId: dto.accountId ?? null };
-      if (req.targetSharedId) {
+      if (req.targetSharedId && req.kind === 'INSTALLMENTS') {
+        sharedId = await this.rebuildPlan(userId, req.targetSharedId, body as CreatePlanDto, req.fromUserId, payload.myAccountId);
+      } else if (req.targetSharedId) {
         // Cambio: se rehace su compra con los datos nuevos, en su cuenta y categoría de siempre
         const current = await this.prisma.transaction.findFirst({ where: { sharedId: req.targetSharedId, userId } });
         if (!current) throw new NotFoundException('La compra ya no existe');
@@ -260,13 +399,14 @@ export class SharedRequestsService {
     }
 
     // En cuotas: la parte de quien la mandó sale de la cuenta que eligió al registrarla
-    if (req.kind === 'INSTALLMENTS' && payload.myAccountId && sharedId) {
+    if (req.kind === 'INSTALLMENTS' && !req.targetSharedId && payload.myAccountId && sharedId) {
       const mine = await this.prisma.installmentPlan.findFirst({ where: { userId: req.fromUserId, shared: { mirrorOfId: sharedId } } });
       if (mine) await this.installments.setMyAccount(req.fromUserId, mine.id, { accountId: payload.myAccountId }).catch(() => undefined);
     }
 
     await this.prisma.$transaction(async (db) => {
-      await db.sharedRequest.delete({ where: { id } });
+      // Si se rehízo la compra, la solicitud ya se fue con ella
+      await db.sharedRequest.deleteMany({ where: { id } });
       await db.notification.updateMany({ where: { userId, dedupeKey: `sreq:${id}`, readAt: null }, data: { readAt: new Date() } });
       // A quien la mandó ya le llegó "compartió una compra contigo": se cambia por "la aceptó"
       const mirror = sharedId ? await db.sharedExpense.findFirst({ where: { mirrorOfId: sharedId, userId: req.fromUserId } }) : null;
@@ -390,6 +530,12 @@ class SharedRequestsController {
 
   @Post('change')
   change(@CurrentUser() u: AuthUser, @Body() dto: ProposeChangeDto) { return this.svc.proposeChange(u.id, dto); }
+
+  @Post('change-plan-draft') @HttpCode(200)
+  planDraft(@CurrentUser() u: AuthUser, @Body() dto: PlanDraftDto) { return this.svc.planDraft(u.id, dto.planId); }
+
+  @Post('change-plan')
+  changePlan(@CurrentUser() u: AuthUser, @Body() dto: ProposePlanChangeDto) { return this.svc.proposePlanChange(u.id, dto); }
 
   @Post(':id/accept') @HttpCode(200)
   accept(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: AcceptDto) { return this.svc.accept(u.id, id, dto); }

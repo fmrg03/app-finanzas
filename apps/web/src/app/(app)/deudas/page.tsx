@@ -361,6 +361,7 @@ function MyPartAccount({ p }: { p: InstallmentPlan }) {
 
 function PlanCard({ p }: { p: InstallmentPlan }) {
   const [paying, setPaying] = useState<string | null>(null);
+  const [proposing, setProposing] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const del = useApiMutation(() => api(`/installment-plans/${p.id}`, { method: 'DELETE' }));
   const unpay = useApiMutation((id: string) => api(`/installments/${id}/pay`, { method: 'DELETE' }));
@@ -392,6 +393,16 @@ function PlanCard({ p }: { p: InstallmentPlan }) {
         {!p.paidByMe && ` Tu parte de cada cuota se registra cuando ${p.shared?.paidBy?.name ?? 'quien pagó'} la marca pagada (o al vencer) y abona tu deuda.`}
       </p>
       {!p.paidByMe && <MyPartAccount p={p} />}
+      {p.shared?.mirrorOf && p.paidCount === 0 && (
+        <button onClick={() => setProposing(true)} className="mt-2 text-sm font-semibold text-accent hover:underline">
+          ¿Algo está mal? Proponer un cambio a {p.shared.paidBy?.name ?? 'quien pagó'}
+        </button>
+      )}
+      {proposing && (
+        <Dialog open onOpenChange={(o) => !o && setProposing(false)} title="Proponer un cambio">
+          <TransactionForm proposePlan={{ id: p.id, payerName: p.shared?.paidBy?.name ?? 'quien pagó' }} onDone={() => setProposing(false)} />
+        </Dialog>
+      )}
 
       <ul className="mt-3 divide-y divide-line text-sm">
         {p.installments.map((i) => (
