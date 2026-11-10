@@ -168,25 +168,40 @@ export class ProjectionService {
     return out;
   }
 
-  /** Cuotas que pagas tú (incluidas las de compras compartidas que pagaste): sale la cuota completa de tu bolsillo. */
+  /**
+   * Cuotas por pagar. Si la compra la hiciste tú, sale la cuota completa de tu bolsillo (lo de los demás te lo deben).
+   * Si la hizo otra persona, solo tu parte, que le pagas a ella (desde la cuenta elegida para tu parte).
+   */
   private async installmentItems(userId: string, end: Date): Promise<Raw[]> {
     const items = await this.prisma.installment.findMany({
-      where: { transactionId: null, dueDate: { lte: end }, plan: { userId, OR: [{ sharedId: null }, { shared: { paidByPersonId: null } }] } },
+      where: { transactionId: null, dueDate: { lte: end }, plan: { userId } },
       include: {
         plan: {
           select: {
             id: true, provider: true, description: true, count: true, rateSource: true,
             category: { select: { id: true, name: true, color: true } }, account: { select: { id: true, name: true } },
+            myAccount: { select: { id: true, name: true } },
+            shared: { select: { paidByPersonId: true, totalUsd: true, paidBy: { select: { name: true } }, participants: { where: { personId: null }, select: { amountUsd: true } } } },
           },
         },
       },
     });
-    return items.map((i) => ({
-      key: `inst:${i.id}`, date: i.dueDate, kind: 'INSTALLMENT' as const, type: 'EXPENSE' as const,
-      description: i.plan.description, detail: `Cuota ${i.n} de ${i.plan.count}, ${i.plan.provider}`,
-      category: i.plan.category, account: i.plan.account, currency: 'USD' as const, amount: i.amountUsd, funded: new D(0),
-      rateSource: i.plan.rateSource, recurringId: null, planId: i.plan.id,
-    }));
+    const out: Raw[] = [];
+    for (const i of items) {
+      const s = i.plan.shared;
+      const byOther = !!s?.paidByPersonId;
+      const pct = byOther && !s!.totalUsd.isZero() ? (s!.participants[0]?.amountUsd ?? new D(0)).div(s!.totalUsd) : new D(1);
+      const amount = byOther ? i.amountUsd.mul(pct).toDecimalPlaces(2) : i.amountUsd;
+      if (amount.lte(0)) continue;
+      out.push({
+        key: `inst:${i.id}`, date: i.dueDate, kind: 'INSTALLMENT', type: 'EXPENSE',
+        description: i.plan.description,
+        detail: `Cuota ${i.n} de ${i.plan.count}, ${i.plan.provider}${byOther ? `; tu parte, para ${s!.paidBy?.name ?? 'quien pagó'}` : ''}`,
+        category: i.plan.category, account: byOther ? i.plan.myAccount : i.plan.account, currency: 'USD', amount, funded: new D(0),
+        rateSource: i.plan.rateSource, recurringId: null, planId: i.plan.id,
+      });
+    }
+    return out;
   }
 
   private async latestRates() {

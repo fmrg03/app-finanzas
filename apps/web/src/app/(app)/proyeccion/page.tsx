@@ -115,7 +115,7 @@ function MonthDetail({ m, currency, rates }: { m: ProjectedMonth; currency: Curr
 
       <p className="mt-6 text-xs text-muted">
         Los montos en la otra moneda se estiman con la última tasa{rates.BCV ? ` (BCV ${rate(rates.BCV)})` : ''}.
-        Las cuotas de compras que pagó otra persona no aparecen: son deudas con ella.
+        En compras en cuotas que hizo otra persona aparece solo tu parte, que le pagas a ella.
       </p>
     </>
   );
