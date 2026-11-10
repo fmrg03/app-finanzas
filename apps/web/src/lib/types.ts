@@ -392,6 +392,10 @@ export interface AccountSummary {
 export interface SharedRequest {
   id: string;
   kind: 'PURCHASE' | 'INSTALLMENTS';
+  /** Es un cambio propuesto a una compra ya registrada */
+  change: boolean;
+  /** Si es un cambio: cómo está ahora */
+  before: { description: string | null; date: string; currency: Currency; amount: string; totalUsd: string; parts: SharedRequest['parts'] } | null;
   /** true: te la mandaron a ti (pagaste tú) */
   incoming: boolean;
   from: { id: string; name: string } | null;

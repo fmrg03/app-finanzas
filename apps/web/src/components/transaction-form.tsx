@@ -74,14 +74,17 @@ export function TransactionForm({
   const [receipt, setReceipt] = useState<ReceiptRead | null>(null);
   const isShared = !!tx?.shared;
   // Inicial de una compra en cuotas, o cuota que se registró sola: los montos los define la compra
-  const locked = (!!tx?.installmentPlanId && (!tx.installment || !tx.accountId)) || !!tx?.shared?.mirrorOf || !!tx?.debtPayment;
+  // Copia de una compra de un familiar en modo "proponer cambio": se edita como si fuera nueva y se le envía
+  const [proposing, setProposing] = useState(false);
+  const [loadingDraft, setLoadingDraft] = useState(false);
+  const locked = !proposing && ((!!tx?.installmentPlanId && (!tx.installment || !tx.accountId)) || !!tx?.shared?.mirrorOf || !!tx?.debtPayment);
   const [sharedOn, setSharedOn] = useState(isShared || startWith === 'shared');
   const [split, setSplit] = useState<SplitState>(() =>
     tx?.shared ? splitFromShared(tx.shared, Number(tx.originalAmount), Number(tx.amountUsd)) : emptySplit(),
   );
   const [cuotasOn, setCuotasOn] = useState(startWith === 'cuotas');
   const [inst, setInst] = useState<InstallmentState>(emptyInstallments);
-  const [done, setDone] = useState<{ kind: 'tx'; tx: Transaction } | { kind: 'plan'; plan: InstallmentPlan } | { kind: 'request'; to: string } | null>(null);
+  const [done, setDone] = useState<{ kind: 'tx'; tx: Transaction } | { kind: 'plan'; plan: InstallmentPlan } | { kind: 'request'; to: string; change?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const invalidate = useInvalidateMoney();
   const { data: people = [] } = usePeople();
@@ -139,7 +142,32 @@ export function TransactionForm({
   const paidByOther = sharedOn && split.paidBy !== null;
   const [myAccountId, setMyAccountId] = useState('');
   // Pagó un familiar que usa la app: se le envía para que la confirme
-  const linkedPayer = !tx && paidByOther ? people.find((p) => p.id === split.paidBy && p.linkedUserId) : undefined;
+  const linkedPayer = (!tx || proposing) && paidByOther ? people.find((p) => p.id === split.paidBy && p.linkedUserId) : undefined;
+
+  /** Carga la compra completa (con el reparto de quien pagó) para proponer un cambio. */
+  async function startProposal() {
+    if (!tx) return;
+    setLoadingDraft(true);
+    setError(null);
+    try {
+      const d = await api<{
+        date: string; currency: Currency; amount: string; description: string | null; rateSource: RateSource;
+        split: { paidByPersonId: string; mode: SplitState['mode']; participants: { personId: string | null; value?: string }[] };
+      }>('/shared-requests/change-draft', { method: 'POST', json: { txId: tx.id } });
+      setS((p) => ({ ...p, date: d.date, currency: d.currency, amount: String(Number(d.amount)).replace('.', ','), description: d.description ?? '', rateSource: d.rateSource }));
+      setSplit({
+        paidBy: d.split.paidByPersonId, mode: d.split.mode,
+        rows: d.split.participants.map((x) => ({ personId: x.personId, value: x.value ? String(Number(x.value)).replace('.', ',') : '' })),
+      });
+      setRateTouched(true);
+      setSharedOn(true);
+      setProposing(true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoadingDraft(false);
+    }
+  }
   const totalUsd = amountNum > 0 && (s.currency === 'USD' || effRate > 0) ? (s.currency === 'USD' ? amountNum : amountNum / effRate) : null;
   const myPct = sharedOn && amountNum > 0
     ? ((previewParts(split, amountNum)[split.rows.findIndex((r) => !r.personId)] ?? 0) / amountNum) * 100
@@ -150,10 +178,24 @@ export function TransactionForm({
     const rateFields = { rateSource: s.rateSource, ...(s.rateSource === 'MANUAL' ? { rate: normAmount(s.manualRate) } : {}) };
     const base = { categoryId: s.categoryId || null, date: s.date, currency: s.currency, amount, ...rateFields };
     if (sharedOn) {
-      const problem = splitProblem(split, Number(amount), people, !!tx);
+      const problem = splitProblem(split, Number(amount), people, !!tx && !proposing);
       if (problem) return setError(problem);
     }
     setBusy(true);
+    if (proposing && tx) {
+      try {
+        await api('/shared-requests/change', {
+          method: 'POST',
+          json: { txId: tx.id, ...base, categoryId: null, description: s.description, split: splitToApi(split) },
+        });
+        invalidate();
+        return setDone({ kind: 'request', to: mirrorBy ?? 'quien pagó', change: true });
+      } catch (err) {
+        return setError((err as Error).message);
+      } finally {
+        setBusy(false);
+      }
+    }
     try {
       if (cuotasOn) {
         const pv = installmentPreview(totalUsd, s.date, inst);
@@ -198,7 +240,7 @@ export function TransactionForm({
     if (!(Number(amount) > 0)) return setError('Escribe un monto mayor que cero');
     if (!s.accountId && !paidByOther && !locked) return setError('Elige una cuenta');
     if (s.rateSource === 'MANUAL' && !(Number(normAmount(s.manualRate)) > 0)) return setError('Escribe la tasa manual');
-    if (s.type === 'EXPENSE' && (sharedOn || cuotasOn) && !editingMirror) return submitSpecial(amount);
+    if (s.type === 'EXPENSE' && (sharedOn || cuotasOn) && (!editingMirror || proposing)) return submitSpecial(amount);
 
     const full: TxInput = {
       type: s.type, accountId: s.accountId, categoryId: s.categoryId || null, date: s.date, currency: s.currency, amount,
@@ -258,10 +300,11 @@ export function TransactionForm({
   if (done?.kind === 'request') {
     return (
       <div className="flex flex-col gap-4">
-        <p className="flex items-center gap-2 font-semibold"><CheckCircle2 size={20} className="text-income" /> Enviada a {done.to}</p>
+        <p className="flex items-center gap-2 font-semibold"><CheckCircle2 size={20} className="text-income" /> {done.change ? 'Cambio enviado' : 'Enviada'} a {done.to}</p>
         <p className="text-sm text-muted">
-          Le llegó para que la confirme. Cuando la acepte, te aparece en tus movimientos con tu deuda con {done.to}; si la rechaza, te avisamos.
-          Mientras tanto la ves en Resumen como pendiente.
+          {done.change
+            ? `Le llegó para que lo acepte. Si lo acepta, la compra cambia en las dos cuentas; si lo rechaza, queda como estaba. Mientras tanto lo ves en Resumen como pendiente.`
+            : `Le llegó para que la confirme. Cuando la acepte, te aparece en tus movimientos con tu deuda con ${done.to}; si la rechaza, te avisamos. Mientras tanto la ves en Resumen como pendiente.`}
         </p>
         <Button onClick={onDone} className="self-end">Listo</Button>
       </div>
@@ -301,8 +344,19 @@ export function TransactionForm({
         <div className="flex items-start gap-2 rounded-xl bg-accent-soft p-3 text-sm">
           <Users size={18} className="mt-0.5 shrink-0 text-accent" />
           <p>
-            <strong>{mirrorBy}</strong> registró esta compra y te la compartió: tu parte es <strong>{money(tx!.myAmountUsd, 'USD')}</strong> y quedó como deuda en Deudas.
-            Aquí puedes cambiar categoría, descripción y etiquetas.
+            {proposing ? (
+              <>Cambia lo que haga falta y envíalo: le llega a <strong>{mirrorBy}</strong> para que lo acepte. Si lo rechaza, la compra queda como estaba.</>
+            ) : (
+              <>
+                <strong>{mirrorBy}</strong> registró esta compra y te la compartió: tu parte es <strong>{money(tx!.myAmountUsd, 'USD')}</strong> y quedó como deuda en Deudas.
+                Aquí puedes cambiar categoría, descripción y etiquetas.
+                {!tx?.installmentPlanId && (
+                  <button type="button" onClick={startProposal} disabled={loadingDraft} className="mt-1 block font-semibold text-accent hover:underline">
+                    {loadingDraft ? 'Cargando…' : `¿Algo está mal? Proponer un cambio a ${mirrorBy}`}
+                  </button>
+                )}
+              </>
+            )}
           </p>
         </div>
       )}
@@ -350,7 +404,7 @@ export function TransactionForm({
           {!locked && <Segmented label="Moneda" value={s.currency} onChange={(v) => set('currency', v)} options={[{ value: 'USD', label: 'USD' }, { value: 'VES', label: 'Bs' }]} />}
         </div>
         <RateLine preview={preview} source={s.rateSource} rateQ={rateQ} manual={s.rateSource === 'MANUAL'} manualRate={effRate} />
-        {tx && tx.sharePct !== null && (
+        {tx && !proposing && tx.sharePct !== null && (
           <p className="mt-1 text-sm text-muted">Tu parte: <strong className="text-ink">{money(tx.myAmountUsd, 'USD')}</strong> ({money(tx.myAmountVes, 'VES')})</p>
         )}
       </div>
@@ -362,7 +416,7 @@ export function TransactionForm({
         </div>
       )}
       {canSpecial && sharedOn && (
-        <SplitEditor value={split} onChange={setSplit} total={amountNum > 0 ? amountNum : 0} currency={s.currency} rate={s.currency === 'USD' ? null : effRate || null} editing={!!tx} />
+        <SplitEditor value={split} onChange={setSplit} total={amountNum > 0 ? amountNum : 0} currency={s.currency} rate={s.currency === 'USD' ? null : effRate || null} editing={!!tx && !proposing} note={!proposing} />
       )}
       {canSpecial && cuotasOn && (
         <InstallmentEditor value={inst} onChange={setInst} totalUsd={totalUsd} purchaseDate={s.date} myPct={sharedOn ? myPct : null} paidByOther={paidByOther} />
@@ -435,11 +489,11 @@ export function TransactionForm({
       {error && <ErrorNote>{error}</ErrorNote>}
 
       <div className="flex items-center gap-2">
-        {tx && (!locked || tx.debtPayment) && (
+        {tx && !proposing && (!locked || tx.debtPayment) && (
           <Button type="button" variant="danger" onClick={onDelete} disabled={del.isPending}>{tx.installment ? 'Deshacer pago' : 'Eliminar'}</Button>
         )}
         <Button type="submit" disabled={save.isPending || busy} className="ml-auto">
-          {save.isPending || busy ? 'Guardando…' : tx ? 'Guardar cambios' : linkedPayer ? `Enviar a ${linkedPayer.name}` : cuotasOn ? 'Guardar compra' : 'Guardar movimiento'}
+          {save.isPending || busy ? 'Guardando…' : proposing ? `Enviar cambio a ${mirrorBy}` : tx ? 'Guardar cambios' : linkedPayer ? `Enviar a ${linkedPayer.name}` : cuotasOn ? 'Guardar compra' : 'Guardar movimiento'}
         </Button>
       </div>
     </form>

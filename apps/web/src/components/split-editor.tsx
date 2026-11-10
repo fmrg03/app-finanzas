@@ -69,8 +69,8 @@ export function splitProblem(s: SplitState, total: number, people: Person[] = []
 }
 
 export function SplitEditor({
-  value, onChange, total, currency, rate, editing = false,
-}: { value: SplitState; onChange: (s: SplitState) => void; total: number; currency: Currency; rate: number | null; editing?: boolean }) {
+  value, onChange, total, currency, rate, editing = false, note = true,
+}: { value: SplitState; onChange: (s: SplitState) => void; total: number; currency: Currency; rate: number | null; editing?: boolean; note?: boolean }) {
   const { data: people = [] } = usePeople();
   const nameOf = (id: string | null) => (id ? (people.find((p) => p.id === id)?.name ?? '…') : 'Yo');
   const set = (patch: Partial<SplitState>) => onChange({ ...value, ...patch });
@@ -183,7 +183,7 @@ export function SplitEditor({
           <p className="mt-1 text-xs text-muted">Las deudas quedan en USD con la tasa del día, así no pierden valor.</p>
         </div>
       ) : null}
-      {linkedPayer && !problem && (
+      {note && linkedPayer && !problem && (
         <p className="rounded-lg bg-accent-soft/70 px-3 py-2 text-sm text-accent">
           {linkedPayer.name} usa la app: le enviaremos la compra para que la confirme y elija de qué cuenta salió. Cuando la acepte, te aparece con tu deuda; si la rechaza, te avisamos.
         </p>

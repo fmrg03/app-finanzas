@@ -94,12 +94,15 @@ model SharedRequest {
   payload    Json
   // Resumen para mostrar: concepto, monto, partes de cada uno
   preview    Json
+  // Si es un cambio propuesto a una compra ya registrada: el reparto de quien pagó
+  targetSharedId String?
   // Se marca al empezar a aceptarla, para que no se acepte dos veces
   claimedAt  DateTime?
   createdAt  DateTime          @default(now())
 
   fromUser User @relation("SharedRequestsSent", fields: [fromUserId], references: [id], onDelete: Cascade)
   toUser   User @relation("SharedRequestsReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+  target   SharedExpense? @relation(fields: [targetSharedId], references: [id], onDelete: Cascade)
 
   @@index([toUserId])
   @@index([fromUserId])
@@ -546,6 +549,7 @@ model SharedExpense {
 
   @@index([userId])
   @@index([mirrorOfId])
+  changeRequests SharedRequest[]
 }
 
 model SharedParticipant {
