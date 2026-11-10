@@ -267,7 +267,15 @@ export class TransactionsService {
 
   /** Un reparto con abonos ya registrados no se puede rehacer ni borrar sin perder esos abonos. */
   async assertNoPayments(sharedId: string) {
-    const paid = await this.prisma.debtPayment.findFirst({ where: { debt: { sharedId } }, select: { debt: { select: { person: true } } } });
+    // Los abonos automáticos de la parte de cada uno en una compra en cuotas no cuentan: se van con la compra
+    const auto = { installmentPlanId: { not: null } };
+    const paid = await this.prisma.debtPayment.findFirst({
+      where: {
+        debt: { sharedId },
+        NOT: { OR: [{ transaction: { is: auto } }, { mirrorOf: { is: { transaction: { is: auto } } } }] },
+      },
+      select: { debt: { select: { person: true } } },
+    });
     if (paid) {
       throw new ConflictException(`${paid.debt.person} ya registró abonos de esta compra. Borra esos abonos en Deudas antes de cambiar o eliminar el reparto.`);
     }
