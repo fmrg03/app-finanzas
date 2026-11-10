@@ -88,6 +88,7 @@ export class NotificationsService {
       ...(await this.debtCandidates(userId)),
       ...(await this.goalCandidates(userId)),
       ...(await this.installmentCandidates(userId)),
+      ...(await this.myPartCandidates(userId)),
       ...(await this.reserveCandidates(userId)),
     ];
     if (!candidates.length) return 0;
@@ -163,6 +164,33 @@ export class NotificationsService {
   }
 
   /** Cuotas que te tocan pagar a ti: aviso unos días antes y otro si se vencen. */
+  /** Compras en cuotas que hizo otra persona: se pregunta si ya pagaste tu parte de cada cuota (no se asume). */
+  private async myPartCandidates(userId: string): Promise<Candidate[]> {
+    const today = parseDateOnly(todayLocal());
+    const limit = new Date(today.getTime() + INSTALLMENT_NOTICE_DAYS * 86_400_000);
+    const items = await this.prisma.installment.findMany({
+      where: { transactionId: null, dueDate: { lte: limit }, plan: { userId, shared: { paidByPersonId: { not: null } } } },
+      include: { plan: { select: { provider: true, description: true, count: true, sharedId: true, shared: { select: { totalUsd: true, paidBy: { select: { name: true } }, participants: { where: { personId: null }, select: { amountUsd: true } } } } } } },
+    });
+    return items.map((i) => {
+      const s = i.plan.shared!;
+      const pct = s.totalUsd.isZero() ? 0 : Number(s.participants[0]?.amountUsd ?? 0) / Number(s.totalUsd);
+      const part = money(Number(i.amountUsd) * pct, 'USD');
+      const who = s.paidBy?.name ?? 'quien pagó';
+      const what = `${i.plan.provider}: ${i.plan.description}`;
+      const overdue = i.dueDate < today;
+      return {
+        type: overdue ? 'INSTALLMENT_OVERDUE' as const : 'INSTALLMENT_DUE' as const,
+        dedupeKey: `mypart:${i.id}:${overdue ? 'overdue' : 'due'}`,
+        title: overdue ? `¿Pagaste tu parte de la cuota ${i.n} de ${what}?` : `Se viene tu parte de la cuota ${i.n} de ${what}`,
+        body: overdue
+          ? `Venció el ${dmy(i.dueDate)}: tu parte es ${part}. Si ya se la pagaste a ${who}, confírmalo en Deudas > Cuotas para registrarla.`
+          : `Vence el ${dmy(i.dueDate)}: tu parte es ${part}, para ${who}.`,
+        link: '/deudas?tab=cuotas',
+      };
+    });
+  }
+
   private async installmentCandidates(userId: string): Promise<Candidate[]> {
     const today = parseDateOnly(todayLocal());
     const limit = new Date(today.getTime() + INSTALLMENT_NOTICE_DAYS * 86_400_000);

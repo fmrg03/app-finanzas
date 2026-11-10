@@ -359,12 +359,37 @@ function MyPartAccount({ p }: { p: InstallmentPlan }) {
   );
 }
 
+/** Confirmas que le pagaste tu parte de una cuota a quien hizo la compra: sale de tu cuenta y abona tu deuda. */
+function MyPartForm({ p, i, share, onDone }: { p: InstallmentPlan; i: Installment; share: number; onDone: () => void }) {
+  const { data: accounts = [] } = useAccounts();
+  const active = accounts.filter((a) => !a.archivedAt);
+  const [date, setDate] = useState(today() < i.dueDate ? today() : i.dueDate);
+  const [accountId, setAccountId] = useState(p.myAccount?.id ?? '');
+  const pay = useApiMutation(() => api(`/installments/${i.id}/my-part`, { method: 'POST', json: { date, ...(accountId ? { accountId } : {}) } }));
+  return (
+    <div className="mt-2 grid gap-2 rounded-lg bg-canvas p-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+      <Field label="¿Cuándo le pagaste?"><Input type="date" value={date} max={today()} onChange={(e) => setDate(e.target.value)} className="h-9" /></Field>
+      <Field label="¿De qué cuenta salió?">
+        <Select value={accountId} onChange={(e) => setAccountId(e.target.value)} className="h-9">
+          <option value="">Ninguna (no mueve tus cuentas)</option>
+          {active.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </Select>
+      </Field>
+      <Button className="h-9" disabled={pay.isPending} onClick={async () => { await pay.mutateAsync(undefined); onDone(); }}>
+        Registrar {money(share, 'USD')}
+      </Button>
+      {pay.error && <p className="text-xs text-expense sm:col-span-3">{pay.error.message}</p>}
+    </div>
+  );
+}
+
 function PlanCard({ p }: { p: InstallmentPlan }) {
   const [paying, setPaying] = useState<string | null>(null);
   const [proposing, setProposing] = useState(false);
   const [showShare, setShowShare] = useState(false);
   const del = useApiMutation(() => api(`/installment-plans/${p.id}`, { method: 'DELETE' }));
   const unpay = useApiMutation((id: string) => api(`/installments/${id}/pay`, { method: 'DELETE' }));
+  const undoMine = useApiMutation((id: string) => api(`/installments/${id}/my-part`, { method: 'DELETE' }));
   const pct = (Number(p.paidUsd) / Number(p.totalUsd)) * 100;
   const f = p.myPct !== null ? Number(p.myPct) / 100 : 1;
 
@@ -390,7 +415,7 @@ function PlanCard({ p }: { p: InstallmentPlan }) {
       <Progress className="mt-2" pct={pct} tone={Number(p.remainingUsd) <= 0 ? 'income' : 'accent'} label={`Pagado ${Math.round(pct)} %`} />
       <p className="mt-1 text-xs text-muted">
         Inicial {money(p.downPaymentUsd, 'USD')} y {p.paidCount} de {p.count} cuotas pagadas.
-        {!p.paidByMe && ` Tu parte de cada cuota se registra cuando ${p.shared?.paidBy?.name ?? 'quien pagó'} la marca pagada (o al vencer) y abona tu deuda.`}
+        {!p.paidByMe && ` Tu parte de cada cuota se registra cuando ${p.shared?.paidBy?.name ?? 'quien pagó'} la marca pagada o cuando confirmas que le pagaste, y abona tu deuda.`}
       </p>
       {!p.paidByMe && <MyPartAccount p={p} />}
       {p.shared?.mirrorOf && p.paidCount === 0 && (
@@ -427,8 +452,19 @@ function PlanCard({ p }: { p: InstallmentPlan }) {
               ) : (
                 <button onClick={() => setPaying(paying === i.id ? null : i.id)} className="w-16 text-right text-xs font-semibold text-accent hover:underline">Pagar</button>
               ))}
+              {!p.paidByMe && (i.transactionId ? (
+                <button onClick={() => confirm(`¿Deshacer tu parte de la cuota ${i.n}? Se borra el gasto y el abono a tu deuda.`) && undoMine.mutate(i.id)} className="w-16 text-right text-xs text-muted hover:text-expense">Deshacer</button>
+              ) : (
+                <button onClick={() => setPaying(paying === i.id ? null : i.id)} className="w-16 text-right text-xs font-semibold text-accent hover:underline">Ya pagué</button>
+              ))}
             </div>
-            {paying === i.id && <PayForm i={i} onDone={() => setPaying(null)} />}
+            {!p.paidByMe && !i.transactionId && (i.overdue || paying === i.id) && paying !== i.id && (
+              <p className="mt-1 pl-8 text-xs text-expense">
+                ¿Ya le pagaste tu parte ({money(Number(i.amountUsd) * f, 'USD')}) a {p.shared?.paidBy?.name ?? 'quien pagó'}?{' '}
+                <button onClick={() => setPaying(i.id)} className="font-semibold text-accent hover:underline">Sí, registrarla</button>
+              </p>
+            )}
+            {paying === i.id && (p.paidByMe ? <PayForm i={i} onDone={() => setPaying(null)} /> : <MyPartForm p={p} i={i} share={Number(i.amountUsd) * f} onDone={() => setPaying(null)} />)}
           </li>
         ))}
       </ul>

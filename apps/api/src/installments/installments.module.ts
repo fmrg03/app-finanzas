@@ -103,6 +103,14 @@ class PayInstallmentDto {
   rate?: string;
 }
 
+class MyPartDto {
+  @ApiPropertyOptional({ description: 'Día en que pagaste tu parte; por defecto hoy' }) @IsOptional() @IsDateString({ strict: true })
+  date?: string;
+
+  @ApiPropertyOptional({ description: 'Cuenta de la que salió; por defecto la elegida para tu parte' }) @IsOptional() @IsString()
+  accountId?: string;
+}
+
 class MyAccountDto {
   @ApiPropertyOptional({ nullable: true, description: 'Cuenta de la que sale tu parte; null para no usar ninguna' })
   @ValidateIf((_, v) => v !== null) @IsString()
@@ -351,19 +359,53 @@ export class InstallmentsService implements OnApplicationBootstrap {
   }
 
   /**
-   * Compras que hizo otra persona: tu parte de cada cuota se registra cuando ella la marca pagada,
-   * o al vencer si no la marcó. Sale de la cuenta que elegiste y baja tu deuda con ella.
+   * Compras que hizo otra persona: tu parte de cada cuota se registra cuando quien pagó la marca pagada,
+   * o cuando tú confirmas que le pagaste (al vencer se te pregunta; no se asume pagada).
    */
-  async processDue(userId?: string) {
-    const today = parseDateOnly(todayLocal());
-    const due = await this.prisma.installment.findMany({
-      where: { transactionId: null, dueDate: { lte: today }, plan: { ...(userId ? { userId } : {}), shared: { paidByPersonId: { not: null } } } },
-      include: { plan: true },
-      orderBy: { dueDate: 'asc' },
+  async processDue(_userId?: string) {
+    return 0;
+  }
+
+  /** Confirmas que pagaste tu parte de una cuota de una compra que hizo otra persona. */
+  async payMyPart(userId: string, installmentId: string, dto: MyPartDto) {
+    const inst = await this.prisma.installment.findFirst({
+      where: { id: installmentId, plan: { userId } },
+      include: { plan: { include: { shared: { select: { paidByPersonId: true } } } } },
     });
-    let created = 0;
-    for (const inst of due) if (await this.registerPart(inst, toDateOnly(inst.dueDate))) created++;
-    return created;
+    if (!inst) throw new NotFoundException('Cuota no encontrada');
+    if (!inst.plan.shared?.paidByPersonId) throw new BadRequestException('Esta compra la pagas tú: marca la cuota como pagada');
+    if (inst.transactionId) throw new ConflictException(`Tu parte de la cuota ${inst.n} ya está registrada`);
+    const date = dto.date ?? todayLocal();
+    if (date > todayLocal()) throw new BadRequestException('La fecha no puede ser futura');
+    if (dto.accountId) {
+      await this.transactions.assertAccount(userId, dto.accountId);
+      if (dto.accountId !== inst.plan.myAccountId) await this.prisma.installmentPlan.update({ where: { id: inst.planId }, data: { myAccountId: dto.accountId } });
+    }
+    const { shared: _s, ...plan } = inst.plan;
+    await this.registerPart({ ...inst, plan }, date);
+    return this.findOne(userId, inst.planId);
+  }
+
+  /** Deshace tu parte de una cuota (el gasto y el abono a tu deuda). */
+  async undoMyPart(userId: string, installmentId: string) {
+    const inst = await this.prisma.installment.findFirst({
+      where: { id: installmentId, plan: { userId } },
+      include: { plan: { include: { shared: { select: { paidByPersonId: true } } } } },
+    });
+    if (!inst) throw new NotFoundException('Cuota no encontrada');
+    if (!inst.plan.shared?.paidByPersonId) throw new BadRequestException('Esta compra la pagas tú: deshaz el pago de la cuota');
+    if (!inst.transactionId) throw new ConflictException(`Tu parte de la cuota ${inst.n} no está registrada`);
+    await this.removePart(inst.transactionId);
+    return this.findOne(userId, inst.planId);
+  }
+
+  private async removePart(txId: string) {
+    await this.prisma.$transaction(async (db) => {
+      const pays = await db.debtPayment.findMany({ where: { transactionId: txId }, include: { debt: true } });
+      await db.debtPayment.deleteMany({ where: { id: { in: pays.map((p) => p.id) } } });
+      await db.transaction.delete({ where: { id: txId } });
+      for (const p of pays) await this.settle(db, p.debt.id, p.debt.linkedDebtId);
+    });
   }
 
   /** Tu parte de una cuota de una compra que pagó otra persona, con la tasa del día en que se paga (BCV en Cashea). */
@@ -408,14 +450,7 @@ export class InstallmentsService implements OnApplicationBootstrap {
       where: { n, transactionId: { not: null }, dueDate: { gt: today }, plan: { shared: { mirrorOfId: sharedId } } },
       include: { plan: true },
     });
-    for (const i of items) {
-      await this.prisma.$transaction(async (db) => {
-        const pays = await db.debtPayment.findMany({ where: { transactionId: i.transactionId! }, include: { debt: true } });
-        await db.debtPayment.deleteMany({ where: { id: { in: pays.map((p) => p.id) } } });
-        await db.transaction.delete({ where: { id: i.transactionId! } });
-        for (const p of pays) await this.settle(db, p.debt.id, p.debt.linkedDebtId);
-      });
-    }
+    for (const i of items) await this.removePart(i.transactionId!);
   }
 
   /**
@@ -527,6 +562,10 @@ class InstallmentsController {
   @Patch('installment-plans/:id/my-account') myAccount(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: MyAccountDto) {
     return this.svc.setMyAccount(u.id, id, dto);
   }
+  @Post('installments/:id/my-part') @HttpCode(200) myPart(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: MyPartDto) {
+    return this.svc.payMyPart(u.id, id, dto);
+  }
+  @Delete('installments/:id/my-part') undoMyPart(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.undoMyPart(u.id, id); }
   @Delete('installments/:id/pay') @HttpCode(204) unpay(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.svc.unpay(u.id, id); }
 }
 
