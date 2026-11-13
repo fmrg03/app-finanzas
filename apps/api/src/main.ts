@@ -13,7 +13,7 @@ async function bootstrap() {
   app.disable('x-powered-by');
   app.use(cookieParser());
   app.setGlobalPrefix('api');
-  app.enableCors({ origin: process.env.WEB_URL ?? 'http://localhost:3000', credentials: true });
+  app.enableCors({ origin: process.env.WEB_URL ?? 'http://localhost:3000', credentials: true, exposedHeaders: ['Content-Disposition'] });
   app.useGlobalFilters(new PrismaExceptionFilter());
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
 

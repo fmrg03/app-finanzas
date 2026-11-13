@@ -14,6 +14,15 @@ export class ExportService {
 
   /** Libro de Excel con dos hojas: movimientos y transferencias del período. */
   async xlsx(userId: string, where: Prisma.TransactionWhereInput, from?: string, to?: string) {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Finanzas';
+    wb.created = new Date();
+    await this.addMovements(wb, userId, where, from, to);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  /** Agrega las hojas Movimientos y Transferencias a un libro. */
+  async addMovements(wb: ExcelJS.Workbook, userId: string, where: Prisma.TransactionWhereInput, from?: string, to?: string) {
     const [txs, transfers] = await Promise.all([
       this.prisma.transaction.findMany({
         where,
@@ -34,10 +43,6 @@ export class ExportService {
         orderBy: { date: 'asc' },
       }),
     ]);
-
-    const wb = new ExcelJS.Workbook();
-    wb.creator = 'Finanzas';
-    wb.created = new Date();
 
     const ws = wb.addWorksheet('Movimientos', { views: [{ state: 'frozen', ySplit: 1 }] });
     ws.columns = [
@@ -112,8 +117,6 @@ export class ExportService {
       });
     }
     styleHeader(wt);
-
-    return Buffer.from(await wb.xlsx.writeBuffer());
   }
 }
 
@@ -138,7 +141,7 @@ function detailOf(t: ExportTx) {
   return parts.join(' · ');
 }
 
-function styleHeader(ws: ExcelJS.Worksheet) {
+export function styleHeader(ws: ExcelJS.Worksheet) {
   const h = ws.getRow(1);
   h.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   h.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF16233A' } };

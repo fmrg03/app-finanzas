@@ -1,14 +1,14 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Copy, LogOut, Tags, Zap } from 'lucide-react';
+import { ChevronRight, Copy, FileSpreadsheet, LogOut, Tags, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { FamilySection } from '@/components/family-section';
 import { Button, ErrorNote, Field, Input, Segmented } from '@/components/ui/controls';
 import { useTheme, type ThemeChoice } from '@/lib/theme';
-import { api, logout } from '@/lib/api';
+import { api, downloadFile, logout } from '@/lib/api';
 import { useMe, useReceiptsStatus, type Me } from '@/lib/queries';
 import { session } from '@/lib/session';
 import type { Currency, RateSource } from '@/lib/types';
@@ -25,6 +25,7 @@ export default function AjustesPage() {
       {me && <Preferences me={me} />}
 
       <QuickEntry />
+      <ExportAll />
       {me && <FamilySection isAdmin={me.role === 'ADMIN'} />}
 
       <Link href="/categorias" className="mt-4 flex items-center gap-3 rounded-2xl bg-surface px-5 py-4 hover:bg-canvas/60">
@@ -188,6 +189,34 @@ function QuickEntry() {
           </p>
         </div>
       </details>
+    </section>
+  );
+}
+
+/** Todo en un Excel: para tener tu propia copia o revisarlo en la computadora. */
+function ExportAll() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function go() {
+    setBusy(true); setError(null);
+    try {
+      await downloadFile('/export/all', 'finanzas_completo.xlsx');
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-labelledby="exportar" className="mt-4 rounded-2xl bg-surface p-5">
+      <h2 id="exportar" className="flex items-center gap-2 font-bold"><FileSpreadsheet size={18} className="text-accent" /> Exportar todo a Excel</h2>
+      <p className="mt-1 text-sm text-muted">
+        Un solo archivo con una hoja por tema: movimientos, transferencias, cuentas con su saldo, deudas y abonos, cuotas, metas, presupuestos, recurrentes, personas, conciliaciones y tasas.
+      </p>
+      {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
+      <Button className="mt-3" variant="ghost" onClick={() => void go()} disabled={busy}>
+        <FileSpreadsheet size={16} /> {busy ? 'Preparando…' : 'Descargar Excel'}
+      </Button>
     </section>
   );
 }
