@@ -2,6 +2,7 @@
 
 import { Check, Clock, Users, X } from 'lucide-react';
 import { Fragment, useState } from 'react';
+import { CategorySelect } from '@/components/category-select';
 import { Button, ErrorNote, Field, Input, Select } from '@/components/ui/controls';
 import { api } from '@/lib/api';
 import { cn, dayLabel, money } from '@/lib/format';
@@ -162,10 +163,7 @@ function Incoming({ r }: { r: SharedRequest }) {
             </Select>
           </Field>
           <Field label="Categoría">
-            <Select value={categoryId ?? sameCat?.id ?? ''} onChange={(e) => setCategoryId(e.target.value)}>
-              <option value="">Sin categoría</option>
-              {expenseCats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </Select>
+            <CategorySelect type="EXPENSE" value={categoryId ?? sameCat?.id ?? ''} onChange={setCategoryId} />
           </Field>
           {!active.length && <p className="text-sm text-expense sm:col-span-2">Primero crea una cuenta en Cuentas.</p>}
         </div>

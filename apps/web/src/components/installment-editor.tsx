@@ -1,7 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import { Field, Input, Segmented, Select } from '@/components/ui/controls';
 import { money } from '@/lib/format';
+import { useInstallmentPlans } from '@/lib/planning';
 import { FREQUENCY_LABEL, type InstallmentFrequency } from '@/lib/types';
 
 export interface InstallmentState {
@@ -60,10 +62,7 @@ export function InstallmentEditor({
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-line p-4">
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Plataforma">
-          <Input value={value.provider} onChange={(e) => set('provider', e.target.value)} list="providers" maxLength={40} />
-        </Field>
-        <datalist id="providers"><option value="Cashea" /><option value="Krece" /><option value="Lysto" /></datalist>
+        <ProviderField value={value.provider} onChange={(v) => set('provider', v)} />
         <Field label="Tienda (opcional)">
           <Input value={value.store} onChange={(e) => set('store', e.target.value)} maxLength={80} placeholder="Ej. Daka" />
         </Field>
@@ -127,5 +126,34 @@ export function InstallmentEditor({
         </div>
       )}
     </div>
+  );
+}
+
+/** Plataformas conocidas; se suman las que ya usaste. */
+const PROVIDERS = ['Cashea', 'Krece', 'Lysto'];
+const OTHER = '__otra';
+
+/** Plataforma de cuotas: una lista con las conocidas y las que ya usaste, o "Otra…" para escribirla. */
+function ProviderField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const { data: plans = [] } = useInstallmentPlans();
+  const used = [...new Set(plans.map((p) => p.provider.trim()).filter(Boolean))];
+  const options = [...PROVIDERS, ...used.filter((u) => !PROVIDERS.some((p) => p.toLowerCase() === u.toLowerCase()))];
+  const known = options.some((o) => o.toLowerCase() === value.trim().toLowerCase());
+  const [typing, setTyping] = useState(!known && value !== '');
+  if (typing) {
+    return (
+      <Field label="Plataforma" hint={<button type="button" onClick={() => { setTyping(false); onChange(options[0]); }} className="font-semibold text-accent hover:underline">Elegir de la lista</button>}>
+        <Input autoFocus value={value} onChange={(e) => onChange(e.target.value)} placeholder="Nombre de la plataforma" maxLength={40} />
+      </Field>
+    );
+  }
+  return (
+    <Field label="Plataforma">
+      <Select value={known ? options.find((o) => o.toLowerCase() === value.trim().toLowerCase()) : ''} onChange={(e) => (e.target.value === OTHER ? (setTyping(true), onChange('')) : onChange(e.target.value))}>
+        {!known && <option value="">Elige una</option>}
+        {options.map((o) => <option key={o} value={o}>{o}</option>)}
+        <option value={OTHER}>Otra…</option>
+      </Select>
+    </Field>
   );
 }

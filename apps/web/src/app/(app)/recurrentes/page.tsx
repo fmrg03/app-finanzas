@@ -2,13 +2,14 @@
 
 import { Plus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { CategorySelect } from '@/components/category-select';
 import { DueRecurring } from '@/components/due-recurring';
 import { Button, ErrorNote, Field, Input, Segmented, Select } from '@/components/ui/controls';
 import { Dialog } from '@/components/ui/dialog';
 import { api } from '@/lib/api';
 import { cn, dayLabel, money, today } from '@/lib/format';
 import { useApiMutation, useRecurring } from '@/lib/planning';
-import { useAccounts, useCategories } from '@/lib/queries';
+import { useAccounts } from '@/lib/queries';
 import { canReserve, FREQ_MONTHS, RECURRING_FREQ, type Currency, type Frequency, type RateSource, type Recurring, type TxType } from '@/lib/types';
 
 
@@ -109,12 +110,12 @@ function ReserveBar({ r }: { r: Recurring }) {
 
 function RecurringForm({ r, onDone }: { r?: Recurring; onDone: () => void }) {
   const { data: accounts = [] } = useAccounts();
-  const { data: categories = [] } = useCategories();
   const [type, setType] = useState<TxType>(r?.type ?? 'EXPENSE');
   const [currency, setCurrency] = useState<Currency>(r?.currency ?? 'USD');
   const [frequency, setFrequency] = useState<Frequency>(r?.frequency ?? 'MONTHLY');
   const [autoCreate, setAutoCreate] = useState(r?.autoCreate ?? false);
   const [reserve, setReserve] = useState(r?.reserve ?? false);
+  const [categoryId, setCategoryId] = useState(r?.categoryId ?? '');
   const [reserveDay, setReserveDay] = useState(String(r?.reserveDay ?? 1));
   const [amountText, setAmountText] = useState(r ? String(Number(r.amount)).replace('.', ',') : '');
   const reservable = type === 'EXPENSE' && canReserve(frequency);
@@ -122,7 +123,6 @@ function RecurringForm({ r, onDone }: { r?: Recurring; onDone: () => void }) {
   const save = useApiMutation((b: object) => (r ? api(`/recurring/${r.id}`, { method: 'PATCH', json: b }) : api('/recurring', { method: 'POST', json: b })));
   const del = useApiMutation(() => api(`/recurring/${r!.id}`, { method: 'DELETE' }));
   const toggle = useApiMutation(() => api(`/recurring/${r!.id}`, { method: 'PATCH', json: { active: !r!.active } }));
-  const cats = categories.filter((c) => c.type === type).flatMap((c) => [c, ...(c.children ?? [])]);
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -152,7 +152,7 @@ function RecurringForm({ r, onDone }: { r?: Recurring; onDone: () => void }) {
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-4">
-      <Segmented<TxType> label="Tipo" value={type} onChange={setType} options={[{ value: 'EXPENSE', label: 'Gasto', tone: 'text-expense' }, { value: 'INCOME', label: 'Ingreso', tone: 'text-income' }]} />
+      <Segmented<TxType> label="Tipo" value={type} onChange={(t) => { setType(t); if (t !== type) setCategoryId(''); }} options={[{ value: 'EXPENSE', label: 'Gasto', tone: 'text-expense' }, { value: 'INCOME', label: 'Ingreso', tone: 'text-income' }]} />
       <Field label="Descripción"><Input name="description" defaultValue={r?.description} placeholder="Ej. Internet fibra" required maxLength={300} autoFocus={!r} /></Field>
       <div className="grid grid-cols-[1fr_auto] items-end gap-3">
         <Field label="Monto"><Input name="amount" inputMode="decimal" value={amountText} onChange={(e) => setAmountText(e.target.value)} placeholder="0,00" required /></Field>
@@ -165,10 +165,8 @@ function RecurringForm({ r, onDone }: { r?: Recurring; onDone: () => void }) {
           </Select>
         </Field>
         <Field label="Categoría">
-          <Select name="categoryId" defaultValue={r?.categoryId ?? ''} key={`${type}-${cats.length}`}>
-            <option value="">Sin categoría</option>
-            {cats.map((c) => <option key={c.id} value={c.id}>{c.parentId ? `  ${c.name}` : c.name}</option>)}
-          </Select>
+          <CategorySelect type={type} value={categoryId} onChange={setCategoryId} />
+          <input type="hidden" name="categoryId" value={categoryId} />
         </Field>
         <Field label="Frecuencia">
           <Select value={frequency} onChange={(e) => setFrequency(e.target.value as Frequency)}>

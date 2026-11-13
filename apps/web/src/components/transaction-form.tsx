@@ -4,6 +4,7 @@ import { Camera, CheckCircle2, CreditCard, FileText, HandCoins, Loader2, Users }
 import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { InstallmentEditor, emptyInstallments, installmentPreview, type InstallmentState } from '@/components/installment-editor';
+import { CategorySelect } from '@/components/category-select';
 import { SharePanel } from '@/components/share-panel';
 import { SplitEditor, emptySplit, previewParts, splitFromShared, splitProblem, splitToApi, type SplitState } from '@/components/split-editor';
 import { Button, ErrorNote, Field, Input, Segmented, Select } from '@/components/ui/controls';
@@ -456,7 +457,7 @@ export function TransactionForm({
       {canSpecial && !tx && (
         <div className="flex flex-wrap gap-2">
           <Toggle on={sharedOn} onClick={() => setSharedOn((v) => !v)} icon={<Users size={16} />}>Compartido</Toggle>
-          <Toggle on={cuotasOn} onClick={() => setCuotasOn((v) => !v)} icon={<CreditCard size={16} />}>En cuotas (Cashea)</Toggle>
+          <Toggle on={cuotasOn} onClick={() => setCuotasOn((v) => !v)} icon={<CreditCard size={16} />}>En cuotas</Toggle>
         </div>
       )}
       {canSpecial && sharedOn && (
@@ -468,19 +469,7 @@ export function TransactionForm({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Categoría">
-          <Select value={s.categoryId} onChange={(e) => pickCategory(e.target.value)}>
-            <option value="">Sin categoría</option>
-            {typeCats.map((c) =>
-              c.children?.length ? (
-                <optgroup key={c.id} label={c.name}>
-                  <option value={c.id}>{c.name} (general)</option>
-                  {c.children.map((ch) => <option key={ch.id} value={ch.id}>{ch.name}</option>)}
-                </optgroup>
-              ) : (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ),
-            )}
-          </Select>
+          <CategorySelect type={s.type} value={s.categoryId} onChange={pickCategory} />
         </Field>
         {paidByOther && cuotasOn && !tx ? (
           <Field label="Tu parte sale de" hint="Tu parte de la inicial y de cada cuota, a BCV si es en Bs; abona tu deuda">
