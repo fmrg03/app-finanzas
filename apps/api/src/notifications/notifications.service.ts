@@ -16,6 +16,14 @@ export const GOAL_REMINDER_DAY = 20;
 export const INSTALLMENT_NOTICE_DAYS = 2;
 /** Días antes de un pago con apartado en que se avisa si lo apartado no alcanza. */
 export const RESERVE_SHORT_DAYS = 15;
+/** Gasto raro: al menos estas veces lo normal (la mediana) de su categoría y esta diferencia en USD. */
+export const UNUSUAL_FACTOR = 2.5;
+export const UNUSUAL_MIN_DIFF_USD = 15;
+/** Cuántos gastos previos de la categoría hacen falta para saber qué es "lo normal". */
+export const UNUSUAL_MIN_SAMPLES = 4;
+/** Categoría disparada: lo del mes supera este múltiplo del promedio de los 3 meses anteriores. */
+export const SPIKE_FACTOR = 1.5;
+export const SPIKE_MIN_AVG_USD = 20;
 
 interface Candidate {
   type: NotificationType;
@@ -90,6 +98,7 @@ export class NotificationsService {
       ...(await this.installmentCandidates(userId)),
       ...(await this.myPartCandidates(userId)),
       ...(await this.reserveCandidates(userId)),
+      ...(await this.unusualCandidates(userId)),
     ];
     if (!candidates.length) return 0;
     const { count } = await this.prisma.notification.createMany({
@@ -97,6 +106,123 @@ export class NotificationsService {
       skipDuplicates: true,
     });
     return count;
+  }
+
+  /**
+   * Gastos raros, solo sobre lo anotado en los últimos días:
+   * - un gasto muy por encima de lo normal en su categoría (¿un cero de más?),
+   * - dos gastos iguales en la misma cuenta y día (¿anotado dos veces?),
+   * - una categoría sin presupuesto que este mes ya va muy por encima de su promedio.
+   */
+  private async unusualCandidates(userId: string): Promise<Candidate[]> {
+    const todayStr = todayLocal();
+    const today = parseDateOnly(todayStr);
+    const day = 86_400_000;
+    const since = new Date(Date.now() - 3 * day);
+    const recent = await this.prisma.transaction.findMany({
+      where: { userId, type: 'EXPENSE', createdAt: { gte: since }, date: { gte: new Date(today.getTime() - 7 * day) }, installmentPlanId: null, source: { in: ['MANUAL', 'RECEIPT', 'IMPORT', 'API'] } },
+      include: { category: { select: { name: true } }, account: { select: { name: true } } },
+    });
+    const out: Candidate[] = [];
+    const what = (t: (typeof recent)[number]) => (t.description ? ` (${t.description})` : '');
+    const orig = (t: { originalAmount: Prisma.Decimal; originalCurrency: 'USD' | 'VES' }) => money(t.originalAmount, t.originalCurrency);
+
+    // 1. Muy por encima de lo normal en su categoría
+    const withCat = recent.filter((t) => t.categoryId && t.myAmountUsd.gte(UNUSUAL_MIN_DIFF_USD));
+    if (withCat.length) {
+      const oldest = Math.min(...withCat.map((t) => t.date.getTime()));
+      const history = await this.prisma.transaction.findMany({
+        where: {
+          userId, type: 'EXPENSE', categoryId: { in: [...new Set(withCat.map((t) => t.categoryId!))] },
+          date: { gte: new Date(oldest - 180 * day) }, installmentPlanId: null, source: { in: ['MANUAL', 'RECEIPT', 'IMPORT', 'API'] },
+        },
+        select: { id: true, categoryId: true, date: true, myAmountUsd: true },
+      });
+      for (const t of withCat) {
+        const prev = history
+          .filter((h) => h.categoryId === t.categoryId && h.id !== t.id && h.date <= t.date && h.date.getTime() >= t.date.getTime() - 180 * day)
+          .map((h) => Number(h.myAmountUsd))
+          .sort((a, b) => a - b);
+        if (prev.length < UNUSUAL_MIN_SAMPLES) continue;
+        const mid = prev.length >> 1;
+        const median = prev.length % 2 ? prev[mid] : (prev[mid - 1] + prev[mid]) / 2;
+        const amt = Number(t.myAmountUsd);
+        if (amt < median * UNUSUAL_FACTOR || amt - median < UNUSUAL_MIN_DIFF_USD) continue;
+        out.push({
+          type: 'UNUSUAL_EXPENSE',
+          dedupeKey: `unusual:${t.id}`,
+          title: `Gasto fuera de lo normal en ${t.category!.name}`,
+          body: `Anotaste ${orig(t)}${t.originalCurrency === 'VES' ? ` (${usd(amt)})` : ''} el ${dmy(t.date)}${what(t)}. Lo normal ahí es unos ${usd(median)}. Si es correcto, ignora este aviso; si no, revisa el monto.`,
+          link: '/movimientos',
+        });
+      }
+    }
+
+    // 2. ¿Anotado dos veces? (mismo monto, cuenta, categoría y día)
+    if (recent.length) {
+      const twins = await this.prisma.transaction.findMany({
+        where: {
+          userId, type: 'EXPENSE', accountId: { not: null },
+          OR: recent.filter((t) => t.accountId).map((t) => ({ accountId: t.accountId, categoryId: t.categoryId, date: t.date, originalCurrency: t.originalCurrency, originalAmount: t.originalAmount })),
+        },
+        select: { id: true, accountId: true, categoryId: true, date: true, originalCurrency: true, originalAmount: true },
+      });
+      const seen = new Set<string>();
+      for (const t of recent) {
+        if (!t.accountId) continue;
+        const same = twins.filter((x) => x.accountId === t.accountId && x.categoryId === t.categoryId && x.date.getTime() === t.date.getTime() && x.originalCurrency === t.originalCurrency && x.originalAmount.eq(t.originalAmount));
+        if (same.length < 2) continue;
+        const key = `dup:${same.map((x) => x.id).sort().join(':')}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push({
+          type: 'POSSIBLE_DUPLICATE',
+          dedupeKey: key.length > 180 ? `dup:${t.accountId}:${toDateOnly(t.date)}:${t.originalAmount}:${same.length}` : key,
+          title: '¿Lo anotaste dos veces?',
+          body: `Hay ${same.length} gastos de ${orig(t)} en ${t.account!.name} el ${dmy(t.date)}${what(t)}. Si fue uno solo, borra el repetido en Movimientos.`,
+          link: '/movimientos',
+        });
+      }
+    }
+
+    // 3. Categoría (principal, con sus subcategorías) que este mes va muy por encima de su promedio
+    const [y, m] = todayStr.split('-').map(Number);
+    const monthStart = new Date(Date.UTC(y, m - 1, 1));
+    const histStart = new Date(Date.UTC(y, m - 4, 1));
+    const [cats, budgets, txs] = await Promise.all([
+      this.prisma.category.findMany({ where: { userId, type: 'EXPENSE' }, select: { id: true, name: true, parentId: true } }),
+      this.prisma.budget.findMany({ where: { userId }, select: { categoryId: true } }),
+      this.prisma.transaction.findMany({
+        where: { userId, type: 'EXPENSE', categoryId: { not: null }, date: { gte: histStart, lte: today } },
+        select: { categoryId: true, date: true, myAmountUsd: true },
+      }),
+    ]);
+    const top = new Map(cats.map((c) => [c.id, c.parentId ?? c.id]));
+    const names = new Map(cats.map((c) => [c.id, c.name]));
+    const budgeted = new Set(budgets.map((b) => top.get(b.categoryId) ?? b.categoryId));
+    const sums = new Map<string, { now: number; months: number[] }>();
+    for (const t of txs) {
+      const c = top.get(t.categoryId!);
+      if (!c || budgeted.has(c)) continue;
+      const e = sums.get(c) ?? { now: 0, months: [0, 0, 0] };
+      if (t.date >= monthStart) e.now += Number(t.myAmountUsd);
+      else e.months[(y * 12 + m - 1) - (t.date.getUTCFullYear() * 12 + t.date.getUTCMonth()) - 1] += Number(t.myAmountUsd);
+      sums.set(c, e);
+    }
+    const month = todayStr.slice(0, 7);
+    for (const [c, e] of sums) {
+      if (e.months.filter((v) => v > 0).length < 2) continue;
+      const avg = e.months.reduce((a, b) => a + b, 0) / 3;
+      if (avg < SPIKE_MIN_AVG_USD || e.now < avg * SPIKE_FACTOR) continue;
+      out.push({
+        type: 'CATEGORY_SPIKE',
+        dedupeKey: `spike:${c}:${month}`,
+        title: `${names.get(c)} va muy por encima de lo normal`,
+        body: `Llevas ${usd(e.now)} este mes en ${names.get(c)}; en los últimos 3 meses fueron unos ${usd(avg)} al mes (${Math.round((e.now / avg) * 100)}\u00a0%). Si quieres ponerle un tope, crea un presupuesto.`,
+        link: '/presupuestos',
+      });
+    }
+    return out;
   }
 
   private async budgetCandidates(userId: string): Promise<Candidate[]> {
