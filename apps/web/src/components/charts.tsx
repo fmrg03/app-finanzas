@@ -220,3 +220,48 @@ export function DevaluationBars({ data }: { data: { month: string; devaluationUs
     </div>
   );
 }
+
+/** Inflación personal: tu canasta en USD, en Bs y el dólar BCV, como índice (primer mes = 100). */
+export function InflationChart({ data }: { data: { month: string; usd: string; ves: string; bcv: string | null; partial: boolean }[] }) {
+  const closed = data.filter((d) => !d.partial);
+  const base = closed.find((d) => Number(d.usd) > 0 && Number(d.ves) > 0);
+  const baseBcv = closed.find((d) => d.bcv)?.bcv;
+  const idx = (v: string | null, b?: string | null) => (v && b && Number(b) > 0 ? Math.round((Number(v) / Number(b)) * 1000) / 10 : null);
+  const rows = closed.map((d) => ({
+    month: d.month, label: monthShort(d.month),
+    usd: idx(d.usd, base?.usd), ves: idx(d.ves, base?.ves), bcv: idx(d.bcv, baseBcv),
+    rawUsd: d.usd, rawVes: d.ves, rawBcv: d.bcv,
+  }));
+  const color = { usd: CHART.current, ves: CHART.expense, bcv: CHART.previous };
+  return (
+    <div className="h-60 w-full sm:h-72" role="img" aria-label="Costo de tu canasta en dólares y en bolívares, y el dólar BCV, como índice">
+      <ResponsiveContainer>
+        <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
+          <CartesianGrid vertical={false} stroke={CHART.grid} />
+          <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: CHART.axis, fontSize: 12 }} interval="preserveStartEnd" minTickGap={16} />
+          <YAxis tickLine={false} axisLine={false} tick={{ fill: CHART.axis, fontSize: 12 }} width={44} domain={['auto', 'auto']} />
+          <ReferenceLine y={100} stroke={CHART.axis} strokeOpacity={0.4} />
+          <Tooltip
+            cursor={{ stroke: CHART.axis, strokeWidth: 1 }}
+            content={({ active, payload }) => {
+              const r = active && payload?.[0]?.payload;
+              return r ? (
+                <TooltipBox
+                  title={monthLong(r.month)}
+                  rows={[
+                    { label: `En USD: ${money(r.rawUsd, 'USD')}`, value: r.usd !== null ? String(r.usd) : '—', color: color.usd },
+                    { label: `En Bs: ${money(r.rawVes, 'VES')}`, value: r.ves !== null ? String(r.ves) : '—', color: color.ves },
+                    { label: `BCV: ${r.rawBcv ?? '—'}`, value: r.bcv !== null ? String(r.bcv) : '—', color: color.bcv, dashed: true },
+                  ]}
+                />
+              ) : null;
+            }}
+          />
+          <Line dataKey="bcv" stroke={color.bcv} strokeWidth={2} strokeDasharray="5 4" dot={false} isAnimationActive={false} connectNulls />
+          <Line dataKey="ves" stroke={color.ves} strokeWidth={2.5} dot={false} isAnimationActive={false} connectNulls />
+          <Line dataKey="usd" stroke={color.usd} strokeWidth={2.5} dot={false} isAnimationActive={false} connectNulls />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}

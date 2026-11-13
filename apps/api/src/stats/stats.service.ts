@@ -26,6 +26,102 @@ export class StatsService {
   constructor(private prisma: PrismaService, private fx: FxService, private budgets: BudgetsService) {}
 
   /**
+   * Inflación personal: cuánto cuesta cada mes tu "canasta" (las categorías de gasto de siempre), en USD y en Bs,
+   * comparado con hace 1, 3 y 12 meses, y contra lo que subió el dólar BCV.
+   * Si no eliges categorías, la canasta son las categorías principales con gasto en al menos 3 de cada 4 meses cerrados.
+   */
+  async inflation(userId: string, months = 12, categoryIds?: string[]) {
+    const today = parseDateOnly(todayLocal());
+    const curStart = firstOfMonth(today);
+    // Un mes extra para poder comparar el último mes cerrado con el de hace `months` meses
+    const start = firstOfMonth(today, -months - 1);
+    const [cats, rows, rates] = await Promise.all([
+      this.prisma.category.findMany({ where: { userId, type: 'EXPENSE' }, select: { id: true, name: true, color: true, parentId: true } }),
+      this.prisma.transaction.findMany({
+        where: { userId, type: 'EXPENSE', date: { gte: start, lte: today } },
+        select: { date: true, categoryId: true, myAmountUsd: true, myAmountVes: true },
+      }),
+      this.prisma.exchangeRate.findMany({ where: { source: 'BCV', date: { lte: today } }, orderBy: { date: 'asc' }, select: { date: true, rate: true } }),
+    ]);
+    const top = new Map(cats.map((c) => [c.id, c.parentId ?? c.id]));
+    const keys = Array.from({ length: months + 2 }, (_, i) => monthKey(firstOfMonth(start, i)));
+    const closed = keys.slice(0, -1);
+    // Gasto por categoría principal y mes
+    const by = new Map<string, Map<string, Pair>>();
+    for (const r of rows) {
+      const c = r.categoryId ? top.get(r.categoryId) : undefined;
+      if (!c) continue;
+      const m = by.get(c) ?? new Map<string, Pair>();
+      const k = monthKey(r.date);
+      const p = m.get(k) ?? pair();
+      add(p, r.myAmountUsd, r.myAmountVes);
+      m.set(k, p);
+      by.set(c, m);
+    }
+    const roots = cats.filter((c) => !c.parentId);
+    const usual = roots.filter((c) => {
+      const m = by.get(c.id);
+      return !!m && closed.length > 0 && closed.filter((k) => m.get(k)?.usd.gt(0)).length >= Math.max(2, Math.ceil(closed.length * 0.75));
+    });
+    const valid = new Set(roots.map((c) => c.id));
+    const basket = categoryIds?.length ? categoryIds.filter((id) => valid.has(id)) : usual.map((c) => c.id);
+    const inBasket = new Set(basket);
+
+    // BCV al cierre de cada mes (o hoy en el mes en curso)
+    const bcvAt = (d: Date) => {
+      let r: Dec | null = null;
+      for (const x of rates) { if (x.date <= d) r = x.rate; else break; }
+      return r;
+    };
+    const series = keys.map((k) => {
+      const t = pair();
+      for (const id of basket) { const p = by.get(id)?.get(k); if (p) add(t, p.usd, p.ves); }
+      const end = k === monthKey(today) ? today : lastOfMonth(parseDateOnly(`${k}-01`));
+      return { month: k, partial: k === monthKey(curStart), ...out(t), bcv: bcvAt(end)?.toFixed(2) ?? null };
+    });
+    const last = series[series.length - 2];
+    const pct = (a: number, b: number) => (b > 0 ? Math.round(((a - b) / b) * 1000) / 10 : null);
+    const ago = (n: number) => series[series.length - 2 - n];
+    const vs = (n: number) => {
+      const o = ago(n);
+      if (!last || !o) return null;
+      return {
+        month: o.month,
+        usd: pct(Number(last.usd), Number(o.usd)),
+        ves: pct(Number(last.ves), Number(o.ves)),
+        bcv: last.bcv && o.bcv ? pct(Number(last.bcv), Number(o.bcv)) : null,
+      };
+    };
+    // Promedio de 3 meses para que un mes raro no domine la comparación
+    const avg3 = (endIdx: number, f: 'usd' | 'ves') => {
+      const xs = series.slice(Math.max(0, endIdx - 2), endIdx + 1).map((x) => Number(x[f]));
+      return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+    };
+    const li = series.length - 2;
+    return {
+      months,
+      basket,
+      categories: roots
+        .filter((c) => by.has(c.id))
+        .map((c) => {
+          const m = by.get(c.id)!;
+          const cur = m.get(last?.month ?? '')?.usd.toNumber() ?? 0;
+          const yearAgo = m.get(ago(12)?.month ?? '')?.usd.toNumber() ?? 0;
+          const threeAgo = m.get(ago(3)?.month ?? '')?.usd.toNumber() ?? 0;
+          return {
+            id: c.id, name: c.name, color: c.color, inBasket: inBasket.has(c.id), usual: usual.some((u) => u.id === c.id),
+            lastUsd: cur.toFixed(2), vs3: pct(cur, threeAgo), vs12: pct(cur, yearAgo),
+          };
+        })
+        .sort((a, b) => Number(b.lastUsd) - Number(a.lastUsd)),
+      series,
+      lastClosed: last?.month ?? null,
+      vsPrev: vs(1), vs3: vs(3), vs12: vs(12),
+      trend3: li >= 5 ? { usd: pct(avg3(li, 'usd'), avg3(li - 3, 'usd')), ves: pct(avg3(li, 'ves'), avg3(li - 3, 'ves')) } : null,
+    };
+  }
+
+  /**
    * Resumen de un mes cerrado (por defecto el anterior): lo que entró, salió y quedó, contra el mes previo,
    * las categorías que más pesaron, los presupuestos y los gastos más grandes.
    */
