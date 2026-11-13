@@ -18,8 +18,43 @@
   --color-accent-soft: #e2f0f1;
 }
 
+/* Modo oscuro: los mismos tokens con otros valores. Con "sistema" sigue al dispositivo. */
 @layer base {
-  html { color-scheme: light; }
+  :root[data-theme='dark'] {
+    --color-canvas: #0f1520;
+    --color-surface: #182131;
+    --color-ink: #e6ebf2;
+    --color-muted: #9aa6ba;
+    --color-line: #2a3547;
+    --color-income: #3cc79f;
+    --color-income-soft: #123329;
+    --color-expense: #f08a74;
+    --color-expense-soft: #3d201b;
+    --color-warning: #e8a948;
+    --color-warning-soft: #3a2c12;
+    --color-accent: #5cc0c9;
+    --color-accent-soft: #153a40;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      --color-canvas: #0f1520;
+      --color-surface: #182131;
+      --color-ink: #e6ebf2;
+      --color-muted: #9aa6ba;
+      --color-line: #2a3547;
+      --color-income: #3cc79f;
+      --color-income-soft: #123329;
+      --color-expense: #f08a74;
+      --color-expense-soft: #3d201b;
+      --color-warning: #e8a948;
+      --color-warning-soft: #3a2c12;
+      --color-accent: #5cc0c9;
+      --color-accent-soft: #153a40;
+    }
+  }
+}
+
+@layer base {
   body {
     @apply bg-canvas text-ink antialiased;
     font-feature-settings: 'tnum' 1, 'cv11' 1;

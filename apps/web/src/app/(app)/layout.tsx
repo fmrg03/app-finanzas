@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
 import { NotificationBell, NotificationToasts } from '@/components/notifications';
+import { ThemeToggle } from '@/components/theme-toggle';
 import { ensureSession, logout } from '@/lib/api';
 import { cn, rate } from '@/lib/format';
 import { isMoreSection, NAV_GROUPS, NAV_MOBILE } from '@/lib/nav';
@@ -39,7 +40,10 @@ function Sidebar() {
     <aside className="sticky top-0 hidden h-dvh flex-col overflow-y-auto border-r border-line bg-surface px-4 py-6 md:flex">
       <div className="flex items-center justify-between pl-2">
         <span className="text-xl font-extrabold tracking-tight">Finanzas</span>
-        <NotificationBell />
+        <div className="flex items-center">
+          <ThemeToggle />
+          <NotificationBell />
+        </div>
       </div>
       <nav className="mt-6 flex flex-col">
         {NAV_GROUPS.map((g, i) => (
@@ -111,7 +115,8 @@ function MobileHeader() {
           ))}
         </dl>
       )}
-      <NotificationBell className={cn('-mr-1.5', !shown.length && 'ml-auto')} />
+      <ThemeToggle className={cn(!shown.length && 'ml-auto')} />
+      <NotificationBell className="-mr-1.5" />
     </header>
   );
 }

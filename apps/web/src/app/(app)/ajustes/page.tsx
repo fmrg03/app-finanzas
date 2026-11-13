@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { FamilySection } from '@/components/family-section';
 import { Button, ErrorNote, Field, Input, Segmented } from '@/components/ui/controls';
+import { useTheme, type ThemeChoice } from '@/lib/theme';
 import { api, logout } from '@/lib/api';
 import { useMe, useReceiptsStatus, type Me } from '@/lib/queries';
 import { session } from '@/lib/session';
@@ -25,7 +26,7 @@ export default function AjustesPage() {
 
       {me && <FamilySection isAdmin={me.role === 'ADMIN'} />}
 
-      <Link href="/categorias" className="mt-4 flex items-center gap-3 rounded-2xl bg-surface px-5 py-4 hover:bg-white/70">
+      <Link href="/categorias" className="mt-4 flex items-center gap-3 rounded-2xl bg-surface px-5 py-4 hover:bg-canvas/60">
         <Tags size={20} className="text-accent" />
         <span className="flex-1">
           <span className="block font-semibold">Categorías</span>
@@ -102,6 +103,7 @@ function Preferences({ me }: { me: Me }) {
           </div>
           <Segmented<RateSource> label="Tasa predeterminada" value={me.defaultRateSource} onChange={(v) => mut.mutate({ defaultRateSource: v })} options={[{ value: 'BCV', label: 'BCV' }, { value: 'PARALELO', label: 'Paralelo' }]} />
         </div>
+        <Appearance />
         {mut.error && <ErrorNote>{mut.error.message}</ErrorNote>}
       </div>
     </section>
@@ -137,5 +139,19 @@ function PasswordForm() {
         <Button type="submit" className="ml-auto" disabled={mut.isPending}>Cambiar contraseña</Button>
       </div>
     </form>
+  );
+}
+
+/** Claro, oscuro o como el dispositivo. Se recuerda en cada teléfono o PC. */
+function Appearance() {
+  const { choice, set } = useTheme();
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <p className="font-medium">Apariencia</p>
+        <p className="text-sm text-muted">Con «Sistema» sigue al modo claro u oscuro de tu teléfono o PC.</p>
+      </div>
+      <Segmented<ThemeChoice> label="Apariencia" value={choice} onChange={set} options={[{ value: 'system', label: 'Sistema' }, { value: 'light', label: 'Claro' }, { value: 'dark', label: 'Oscuro' }]} />
+    </div>
   );
 }

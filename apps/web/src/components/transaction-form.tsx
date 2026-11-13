@@ -691,7 +691,7 @@ function ReceiptReader({ onRead, read }: { onRead: (r: ReceiptRead) => void; rea
           type="button"
           onClick={() => input.current?.click()}
           disabled={mut.isPending}
-          className="h-9 shrink-0 rounded-lg bg-surface px-3 text-sm font-semibold text-accent hover:bg-white/70 disabled:opacity-50"
+          className="h-9 shrink-0 rounded-lg bg-surface px-3 text-sm font-semibold text-accent hover:bg-canvas/60 disabled:opacity-50"
         >
           {ex ? 'Otra' : 'Leer factura'}
         </button>

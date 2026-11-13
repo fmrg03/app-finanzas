@@ -59,7 +59,7 @@ export default function PresupuestosPage() {
           <ul className="mt-4 flex flex-col gap-3">
             {d.items.map((b) => (
               <li key={b.id}>
-                <button onClick={() => setEditing(b)} className="w-full rounded-2xl bg-surface p-4 text-left hover:bg-white/70">
+                <button onClick={() => setEditing(b)} className="w-full rounded-2xl bg-surface p-4 text-left hover:bg-canvas/60">
                   <div className="flex items-baseline gap-2">
                     <span aria-hidden className="size-2.5 shrink-0 translate-y-[-1px] rounded-full" style={{ background: b.color }} />
                     <span className="min-w-0 flex-1 truncate font-semibold">{b.name}</span>

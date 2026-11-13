@@ -218,7 +218,7 @@ export default function MovimientosPage() {
 
       <button
         onClick={() => setEditing({ kind: 'tx' })}
-        className="fixed bottom-20 right-4 z-30 inline-flex h-12 items-center gap-2 rounded-full bg-ink pl-4 pr-5 font-semibold text-white shadow-lg hover:bg-ink/90 md:bottom-8 md:right-8"
+        className="fixed bottom-20 right-4 z-30 inline-flex h-12 items-center gap-2 rounded-full bg-ink pl-4 pr-5 font-semibold text-surface shadow-lg hover:bg-ink/90 md:bottom-8 md:right-8"
       >
         <Plus size={20} /> Nuevo movimiento
       </button>

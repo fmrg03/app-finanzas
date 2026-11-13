@@ -6,13 +6,14 @@ import type { MoneyPair, Overview } from '@/lib/queries';
 import type { Currency } from '@/lib/types';
 
 // Colores validados para daltonismo (protan ΔE 9.6) contra el fondo blanco
+// Colores de los gráficos desde los tokens, así siguen al modo claro u oscuro
 export const CHART = {
-  income: '#0a7d63',
-  expense: '#c2412d',
-  current: '#1f6f78',
-  previous: '#9aa5b5',
-  grid: '#e7ebf0',
-  axis: '#5b6880',
+  income: 'var(--color-income)',
+  expense: 'var(--color-expense)',
+  current: 'var(--color-accent)',
+  previous: 'var(--color-muted)',
+  grid: 'var(--color-line)',
+  axis: 'var(--color-muted)',
 };
 
 const pick = (p: MoneyPair, c: Currency) => Number(c === 'USD' ? p.usd : p.ves);
@@ -69,8 +70,8 @@ export function PaceChart({ data, currency, lastDay, labels }: { data: Overview[
               ) : null
             }
           />
-          <Line dataKey="previous" stroke={CHART.previous} strokeWidth={2} strokeDasharray="5 4" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }} isAnimationActive={false} connectNulls />
-          <Line dataKey="current" stroke={CHART.current} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#fff' }} isAnimationActive={false} />
+          <Line dataKey="previous" stroke={CHART.previous} strokeWidth={2} strokeDasharray="5 4" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: 'var(--color-surface)' }} isAnimationActive={false} connectNulls />
+          <Line dataKey="current" stroke={CHART.current} strokeWidth={2.5} dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--color-surface)' }} isAnimationActive={false} />
         </LineChart>
       </ResponsiveContainer>
     </div>
@@ -183,7 +184,7 @@ export function NetWorthChart({ data }: { data: { month: string; netUsd: string;
               ) : null;
             }}
           />
-          <Area dataKey="net" stroke={CHART.current} strokeWidth={2.5} fill="url(#nwFill)" dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: '#fff' }} isAnimationActive={false} />
+          <Area dataKey="net" stroke={CHART.current} strokeWidth={2.5} fill="url(#nwFill)" dot={false} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--color-surface)' }} isAnimationActive={false} />
         </AreaChart>
       </ResponsiveContainer>
     </div>

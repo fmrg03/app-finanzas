@@ -33,7 +33,7 @@ export function SharePanel({
             key={t.personId}
             type="button"
             onClick={() => shareWhatsApp(build(t, rate), t.phone)}
-            className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-surface px-3 py-1.5 text-left text-sm font-semibold hover:bg-white/70"
+            className="inline-flex min-h-9 items-center gap-1.5 rounded-lg bg-surface px-3 py-1.5 text-left text-sm font-semibold hover:bg-canvas/60"
           >
             {t.name}
             <span className="font-normal text-muted">{t.detail}</span>

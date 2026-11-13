@@ -9,7 +9,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
       ref={ref}
       className={cn(
         'inline-flex h-10 items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50',
-        variant === 'primary' && 'bg-ink text-white hover:bg-ink/90',
+        variant === 'primary' && 'bg-ink text-surface hover:bg-ink/90',
         variant === 'ghost' && 'text-ink hover:bg-ink/5',
         variant === 'danger' && 'text-expense hover:bg-expense-soft',
         className,
