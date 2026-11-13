@@ -1,7 +1,7 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, LogOut, Tags } from 'lucide-react';
+import { ChevronRight, Copy, LogOut, Tags, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
@@ -24,6 +24,7 @@ export default function AjustesPage() {
 
       {me && <Preferences me={me} />}
 
+      <QuickEntry />
       {me && <FamilySection isAdmin={me.role === 'ADMIN'} />}
 
       <Link href="/categorias" className="mt-4 flex items-center gap-3 rounded-2xl bg-surface px-5 py-4 hover:bg-canvas/60">
@@ -153,5 +154,40 @@ function Appearance() {
       </div>
       <Segmented<ThemeChoice> label="Apariencia" value={choice} onChange={set} options={[{ value: 'system', label: 'Sistema' }, { value: 'light', label: 'Claro' }, { value: 'dark', label: 'Oscuro' }]} />
     </div>
+  );
+}
+
+/** Accesos directos para anotar un gasto en dos toques. */
+function QuickEntry() {
+  const [copied, setCopied] = useState<string | null>(null);
+  const link = (tipo: string) => `${typeof window === 'undefined' ? '' : window.location.origin}/nuevo?tipo=${tipo}`;
+  const copy = async (tipo: string) => {
+    await navigator.clipboard?.writeText(link(tipo)).catch(() => undefined);
+    setCopied(tipo);
+  };
+  return (
+    <section aria-labelledby="rapido" className="mt-4 rounded-2xl bg-surface p-5">
+      <h2 id="rapido" className="flex items-center gap-2 font-bold"><Zap size={18} className="text-accent" /> Registro rápido</h2>
+      <p className="mt-1 text-sm text-muted">
+        Abre directo «Nuevo gasto» con la cuenta y la categoría que más usas ya elegidas: escribes el monto y listo.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Link href="/nuevo?tipo=gasto" className="inline-flex h-10 items-center rounded-xl bg-ink px-4 text-sm font-semibold text-surface hover:bg-ink/90">Nuevo gasto</Link>
+        <Link href="/nuevo?tipo=ingreso" className="inline-flex h-10 items-center rounded-xl px-4 text-sm font-semibold hover:bg-ink/5">Nuevo ingreso</Link>
+        <button onClick={() => copy('gasto')} className="inline-flex h-10 items-center gap-1.5 rounded-xl px-3 text-sm font-semibold text-accent hover:bg-ink/5">
+          <Copy size={15} /> {copied === 'gasto' ? 'Enlace copiado' : 'Copiar enlace'}
+        </button>
+      </div>
+      <details className="mt-3 text-sm">
+        <summary className="cursor-pointer font-semibold text-accent">Dejarlo como acceso directo en el teléfono</summary>
+        <div className="mt-2 flex flex-col gap-2 text-muted">
+          <p><strong className="text-ink">Android:</strong> mantén presionado el ícono de Finanzas y elige «Nuevo gasto» o «Nuevo ingreso». Puedes arrastrarlo a la pantalla de inicio.</p>
+          <p>
+            <strong className="text-ink">iPhone:</strong> copia el enlace, abre la app <em>Atajos</em> → <em>+</em> → <em>Abrir URL</em>, pega el enlace,
+            ponle de nombre «Gasto» y en <em>Compartir</em> → <em>Agregar a pantalla de inicio</em>. También puedes pedírselo a Siri por su nombre.
+          </p>
+        </div>
+      </details>
+    </section>
   );
 }

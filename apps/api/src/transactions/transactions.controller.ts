@@ -31,6 +31,11 @@ export class TransactionsController {
     return this.transactions.list(u.id, q);
   }
 
+  @Get('habits')
+  habits(@CurrentUser() u: AuthUser, @Query('type') type?: string) {
+    return this.transactions.habits(u.id, type === 'INCOME' ? 'INCOME' : 'EXPENSE');
+  }
+
   @Get('tags')
   tags(@CurrentUser() u: AuthUser) {
     return this.transactions.tags(u.id);

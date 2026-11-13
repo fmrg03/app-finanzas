@@ -18,6 +18,9 @@ export default function manifest(): MetadataRoute.Manifest {
       { src: '/icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
     // Mantener presionado el ícono de la app ofrece este atajo
-    shortcuts: [{ name: 'Nuevo movimiento', short_name: 'Nuevo', url: '/movimientos?nuevo=1', icons: [{ src: '/icon-192.png', sizes: '192x192' }] }],
+    shortcuts: [
+      { name: 'Nuevo gasto', short_name: 'Gasto', url: '/nuevo?tipo=gasto', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
+      { name: 'Nuevo ingreso', short_name: 'Ingreso', url: '/nuevo?tipo=ingreso', icons: [{ src: '/icon-192.png', sizes: '192x192' }] },
+    ],
   };
 }

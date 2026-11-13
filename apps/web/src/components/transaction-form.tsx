@@ -72,9 +72,11 @@ const normAmount = (s: string) => {
 const isSum = (s: string) => /\d[+-]\d/.test(s.replace(/\s/g, ''));
 
 export function TransactionForm({
-  tx, onDone, onTransfer, initialType, startWith, proposePlan,
+  tx, onDone, onTransfer, initialType, startWith, proposePlan, defaults,
 }: {
   tx?: Transaction; onDone: () => void; onTransfer?: () => void; initialType?: TxType; startWith?: 'cuotas' | 'shared';
+  /** Registro rápido: la cuenta y la categoría de siempre ya elegidas */
+  defaults?: { accountId?: string | null; categoryId?: string | null };
   /** Copia de una compra en cuotas de un familiar: se abre para proponerle un cambio */
   proposePlan?: { id: string; payerName: string };
 }) {
@@ -89,11 +91,14 @@ export function TransactionForm({
       tx
         ? fromTx(tx)
         : {
-            type: initialType ?? 'EXPENSE', currency: me?.defaultCurrency ?? 'USD', amount: '', accountId: accounts[0]?.id ?? '',
-            categoryId: '', date: today(), rateSource: me?.defaultRateSource ?? 'BCV', manualRate: '', description: '', tags: '',
+            type: initialType ?? 'EXPENSE',
+            // En el registro rápido, la moneda de la cuenta de siempre (en Provincial se anota en Bs)
+            currency: accounts.find((a) => a.id === defaults?.accountId)?.currency ?? me?.defaultCurrency ?? 'USD', amount: '',
+            accountId: (defaults?.accountId && accounts.some((a) => a.id === defaults.accountId) ? defaults.accountId : accounts[0]?.id) ?? '',
+            categoryId: defaults?.categoryId ?? '', date: today(), rateSource: me?.defaultRateSource ?? 'BCV', manualRate: '', description: '', tags: '',
           },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [tx, me?.defaultCurrency, me?.defaultRateSource, accounts[0]?.id],
+    [tx, me?.defaultCurrency, me?.defaultRateSource, accounts[0]?.id, defaults?.accountId, defaults?.categoryId],
   );
   const [s, setS] = useState<FormState>(initial);
   const [rateTouched, setRateTouched] = useState(!!tx);

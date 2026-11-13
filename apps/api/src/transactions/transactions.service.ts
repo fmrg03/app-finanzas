@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { deleteMirrorsOf } from '../shared/mirror-cleanup';
 import { Prisma, RateSource, TransactionSource } from '@prisma/client';
 import { convertAmounts } from '../common/money.util';
-import { parseDateOnly, toDateOnly } from '../common/date.util';
+import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
 import { ExchangeRatesService } from '../exchange-rates/exchange-rates.service';
 import { FxService } from '../fx/fx.module';
 import { PrismaService } from '../prisma/prisma.service';
@@ -282,6 +282,18 @@ export class TransactionsService {
   }
 
   /** Todas las etiquetas usadas, para autocompletar. */
+  /** La cuenta y la categoría que más usas para gastos (o ingresos) en los últimos 60 días: para el registro rápido. */
+  async habits(userId: string, type: 'INCOME' | 'EXPENSE') {
+    const since = parseDateOnly(todayLocal());
+    since.setUTCDate(since.getUTCDate() - 60);
+    const where = { userId, type, date: { gte: since }, source: { in: ['MANUAL', 'RECEIPT'] as TransactionSource[] } };
+    const [acc, cat] = await Promise.all([
+      this.prisma.transaction.groupBy({ by: ['accountId'], where: { ...where, accountId: { not: null }, account: { archivedAt: null } }, _count: { _all: true }, orderBy: { _count: { accountId: 'desc' } }, take: 1 }),
+      this.prisma.transaction.groupBy({ by: ['categoryId'], where: { ...where, categoryId: { not: null } }, _count: { _all: true }, orderBy: { _count: { categoryId: 'desc' } }, take: 1 }),
+    ]);
+    return { accountId: acc[0]?.accountId ?? null, categoryId: cat[0]?.categoryId ?? null };
+  }
+
   async tags(userId: string) {
     const rows = await this.prisma.$queryRaw<{ tag: string; count: bigint }[]>`
       SELECT tag, COUNT(*) AS count FROM "Transaction", unnest(tags) AS tag
