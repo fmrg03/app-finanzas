@@ -13,7 +13,7 @@ import { MonthNav, useMonth } from '@/components/month-nav';
 import { ErrorNote, Segmented } from '@/components/ui/controls';
 import { cn, money, monthLabel, monthRange } from '@/lib/format';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeftRight, Check } from 'lucide-react';
+import { ArrowLeftRight, Check, Share2 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useAccounts, useCategories, useMe, useOverview, type FxGain, type MoneyPair } from '@/lib/queries';
 import type { Currency } from '@/lib/types';
@@ -43,6 +43,8 @@ export default function ResumenPage() {
           <MonthNav {...nav} />
         </div>
       </header>
+
+      <SummaryLink month={nav.isCurrent ? new Date(nav.month.getFullYear(), nav.month.getMonth() - 1, 1) : nav.month} />
 
       <SharedRequests />
       <DueRecurring />
@@ -276,5 +278,15 @@ function BudgetsGlance() {
         ))}
       </ul>
     </section>
+  );
+}
+
+/** Enlace al resumen para compartir: del mes que estás viendo, o del anterior si estás en el actual. */
+function SummaryLink({ month }: { month: Date }) {
+  const ym = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`;
+  return (
+    <Link href={`/resumen/mes?m=${ym}`} className="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-accent hover:underline">
+      <Share2 size={15} /> Resumen de {monthLabel(month).split(' ')[0].toLowerCase()} para compartir
+    </Link>
   );
 }

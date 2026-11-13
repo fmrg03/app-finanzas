@@ -24,6 +24,8 @@ export const UNUSUAL_MIN_SAMPLES = 4;
 /** Categoría disparada: lo del mes supera este múltiplo del promedio de los 3 meses anteriores. */
 export const SPIKE_FACTOR = 1.5;
 export const SPIKE_MIN_AVG_USD = 20;
+/** Hasta este día del mes se avisa que está listo el resumen del anterior. */
+export const SUMMARY_NOTICE_DAYS = 7;
 
 interface Candidate {
   type: NotificationType;
@@ -99,6 +101,7 @@ export class NotificationsService {
       ...(await this.myPartCandidates(userId)),
       ...(await this.reserveCandidates(userId)),
       ...(await this.unusualCandidates(userId)),
+      ...(await this.summaryCandidates(userId)),
     ];
     if (!candidates.length) return 0;
     const { count } = await this.prisma.notification.createMany({
@@ -223,6 +226,29 @@ export class NotificationsService {
       });
     }
     return out;
+  }
+
+  /** En los primeros días del mes: el resumen del mes anterior, si tuvo movimientos. */
+  private async summaryCandidates(userId: string): Promise<Candidate[]> {
+    const today = todayLocal();
+    if (Number(today.slice(8, 10)) > SUMMARY_NOTICE_DAYS) return [];
+    const [y, m] = today.split('-').map(Number);
+    const from = new Date(Date.UTC(y, m - 2, 1));
+    const to = new Date(Date.UTC(y, m - 1, 0));
+    const sums = await this.prisma.transaction.groupBy({
+      by: ['type'], where: { userId, date: { gte: from, lte: to } }, _sum: { myAmountUsd: true },
+    });
+    if (!sums.length) return [];
+    const of = (t: 'INCOME' | 'EXPENSE') => Number(sums.find((x) => x.type === t)?._sum.myAmountUsd ?? 0);
+    const inc = of('INCOME'), exp = of('EXPENSE');
+    const ym = toDateOnly(from).slice(0, 7);
+    return [{
+      type: 'MONTH_SUMMARY',
+      dedupeKey: `summary:${ym}`,
+      title: `Tu resumen de ${monthName(from)} está listo`,
+      body: `Entraron ${usd(inc)} y salieron ${usd(exp)}: ${inc >= exp ? `te quedaron ${usd(inc - exp)}` : `gastaste ${usd(exp - inc)} más de lo que entró`}. Míralo completo o mándalo por WhatsApp.`,
+      link: `/resumen/mes?m=${ym}`,
+    }];
   }
 
   private async budgetCandidates(userId: string): Promise<Candidate[]> {

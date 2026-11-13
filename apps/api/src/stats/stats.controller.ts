@@ -15,6 +15,13 @@ export class StatsController {
     return this.stats.overview(u.id, q);
   }
 
+  /** Resumen de un mes (por defecto el anterior), para ver o mandar por WhatsApp. */
+  @Get('month-summary')
+  @ApiQuery({ name: 'month', required: false, example: '2026-10' })
+  monthSummary(@CurrentUser() u: AuthUser, @Query('month') month?: string) {
+    return this.stats.monthSummary(u.id, month);
+  }
+
   /** Patrimonio mensual en USD y pérdida por devaluación de los bolívares. */
   @Get('net-worth')
   @ApiQuery({ name: 'months', required: false, example: 12 })

@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
+import { BudgetsService } from '../budgets/budgets.service';
 import { FxService } from '../fx/fx.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { OverviewDto } from './stats.dto';
@@ -22,7 +23,47 @@ const lastOfMonth = (d: Date, shift = 0) => new Date(Date.UTC(d.getUTCFullYear()
 
 @Injectable()
 export class StatsService {
-  constructor(private prisma: PrismaService, private fx: FxService) {}
+  constructor(private prisma: PrismaService, private fx: FxService, private budgets: BudgetsService) {}
+
+  /**
+   * Resumen de un mes cerrado (por defecto el anterior): lo que entró, salió y quedó, contra el mes previo,
+   * las categorías que más pesaron, los presupuestos y los gastos más grandes.
+   */
+  async monthSummary(userId: string, month?: string) {
+    const today = todayLocal();
+    const ym = month ?? toDateOnly(firstOfMonth(parseDateOnly(today), -1)).slice(0, 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ym)) throw new BadRequestException('El mes va como AAAA-MM');
+    if (ym > today.slice(0, 7)) throw new BadRequestException('Ese mes todavía no llega');
+    const from = parseDateOnly(`${ym}-01`);
+    const to = lastOfMonth(from);
+    const pFrom = firstOfMonth(from, -1);
+    const [cur, prev, budgets, biggest] = await Promise.all([
+      this.overview(userId, { from: toDateOnly(from), to: toDateOnly(to), months: 6 }),
+      this.overview(userId, { from: toDateOnly(pFrom), to: toDateOnly(lastOfMonth(pFrom)), months: 1 }),
+      this.budgets.status(userId, ym),
+      this.prisma.transaction.findMany({
+        where: { userId, type: 'EXPENSE', date: { gte: from, lte: to } },
+        orderBy: { myAmountUsd: 'desc' }, take: 3,
+        select: { id: true, date: true, description: true, myAmountUsd: true, originalAmount: true, originalCurrency: true, category: { select: { name: true } } },
+      }),
+    ]);
+    const prevCat = new Map(prev.expenseByCategory.map((c) => [c.categoryId, c.usd]));
+    const inc = Number(cur.totals.income.usd);
+    return {
+      month: ym,
+      isComplete: toDateOnly(to) < today,
+      totals: cur.totals,
+      previousTotals: prev.totals,
+      savingsRate: inc > 0 ? Math.round((Number(cur.totals.net.usd) / inc) * 100) : null,
+      categories: cur.expenseByCategory.slice(0, 5).map((c) => ({ ...c, previousUsd: prevCat.get(c.categoryId) ?? '0.00' })),
+      budgets: budgets.items.map((b) => ({ name: b.name, amountUsd: b.amountUsd, spentUsd: b.spentUsd })),
+      biggest: biggest.map((t) => ({
+        id: t.id, date: toDateOnly(t.date), description: t.description, category: t.category?.name ?? null,
+        usd: t.myAmountUsd.toFixed(2), originalAmount: t.originalAmount.toFixed(2), originalCurrency: t.originalCurrency,
+      })),
+      monthly: cur.monthly,
+    };
+  }
 
   async overview(userId: string, q: OverviewDto) {
     const from = parseDateOnly(q.from);

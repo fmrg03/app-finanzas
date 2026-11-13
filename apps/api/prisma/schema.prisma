@@ -79,6 +79,7 @@ enum NotificationType {
   UNUSUAL_EXPENSE
   POSSIBLE_DUPLICATE
   CATEGORY_SPIKE
+  MONTH_SUMMARY
 }
 
 enum SharedRequestKind {
