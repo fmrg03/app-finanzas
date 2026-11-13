@@ -19,7 +19,9 @@ export type NotificationType = 'BUDGET_NEAR' | 'BUDGET_EXCEEDED' | 'RECURRING_DU
   | 'UNUSUAL_EXPENSE'
   | 'POSSIBLE_DUPLICATE'
   | 'CATEGORY_SPIKE'
-  | 'MONTH_SUMMARY';
+  | 'MONTH_SUMMARY'
+  | 'BACKUP_FAILED'
+  | 'BACKUP_STALE';
 export interface AppNotification {
   id: string;
   type: NotificationType;

@@ -1,7 +1,7 @@
 'use client';
 
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Copy, FileSpreadsheet, Fingerprint, Lock, LogOut, Tags, Zap } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { CheckCircle2, ChevronRight, Copy, DatabaseBackup, FileSpreadsheet, Fingerprint, Lock, LogOut, Tags, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
@@ -10,6 +10,7 @@ import { Button, ErrorNote, Field, Input, Segmented } from '@/components/ui/cont
 import { biometricAvailable, biometricLabel, checkPin, clearLock, createLock, getLock, markUnlocked, registerBiometric, saveLock, type LockConfig } from '@/lib/lock';
 import { useTheme, type ThemeChoice } from '@/lib/theme';
 import { api, downloadFile, logout } from '@/lib/api';
+import { cn } from '@/lib/format';
 import { useMe, useReceiptsStatus, type Me } from '@/lib/queries';
 import { session } from '@/lib/session';
 import type { Currency, RateSource } from '@/lib/types';
@@ -28,6 +29,7 @@ export default function AjustesPage() {
       <QuickEntry />
       {me && <AppLock me={me} />}
       <ExportAll />
+      {me?.role === 'ADMIN' && <Backups />}
       {me && <FamilySection isAdmin={me.role === 'ADMIN'} />}
 
       <Link href="/categorias" className="mt-4 flex items-center gap-3 rounded-2xl bg-surface px-5 py-4 hover:bg-canvas/60">
@@ -348,6 +350,52 @@ function AppLock({ me }: { me: Me }) {
             <Button type="button" variant="ghost" onClick={() => { setMode('view'); setPin(''); setPin2(''); setError(null); }}>Cancelar</Button>
           </div>
         </form>
+      )}
+    </section>
+  );
+}
+
+interface BackupCheck { id: string; checkedAt: string; file: string; ok: boolean; sizeBytes: number | null; users: number | null; accounts: number | null; transactions: number | null; error: string | null }
+interface BackupStatus { configured: boolean; lastOk: BackupCheck | null; daysSinceOk: number | null; stale: boolean; recent: BackupCheck[] }
+
+const when = (iso: string) => new Intl.DateTimeFormat('es-VE', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }).format(new Date(iso));
+const size = (b: number | null) => (b === null ? '' : b > 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+
+/** Estado de los respaldos diarios: cada uno se verifica restaurándolo en una base aparte. */
+function Backups() {
+  const { data: s } = useQuery({ queryKey: ['backups'], queryFn: () => api<BackupStatus>('/backups/status') });
+  if (!s) return null;
+  const last = s.recent[0];
+  return (
+    <section id="respaldos" aria-labelledby="respaldos-t" className="mt-4 scroll-mt-20 rounded-2xl bg-surface p-5">
+      <h2 id="respaldos-t" className="flex items-center gap-2 font-bold"><DatabaseBackup size={18} className="text-accent" /> Respaldos</h2>
+      {!s.configured ? (
+        <p className="mt-1 text-sm text-muted">Todavía no hay respaldos verificados. En la instalación de casa se hace uno cada día y se comprueba restaurándolo.</p>
+      ) : (
+        <>
+          {s.lastOk && !s.stale && last?.ok ? (
+            <p className="mt-2 flex items-start gap-2 text-sm font-semibold text-income">
+              <CheckCircle2 size={18} className="mt-0.5 shrink-0" />
+              <span>Todo bien: el respaldo del {when(s.lastOk.checkedAt)} se restauró completo ({s.lastOk.users} usuarios, {s.lastOk.accounts} cuentas, {s.lastOk.transactions} movimientos).</span>
+            </p>
+          ) : (
+            <div className="mt-2"><ErrorNote>
+              {last && !last.ok ? `El último respaldo (${last.file}) no se pudo restaurar: ${last.error ?? 'error desconocido'}.` : `Hace ${s.daysSinceOk} días que no hay un respaldo verificado.`}
+              {' '}En la PC, corre deploy\casa\respaldar.ps1 y revisa que Docker Desktop esté abierto.
+            </ErrorNote></div>
+          )}
+          <ul className="mt-3 divide-y divide-line text-sm">
+            {s.recent.map((c) => (
+              <li key={c.id} className="flex items-center justify-between gap-3 py-2">
+                <span className="min-w-0 truncate">{c.file}</span>
+                <span className={cn('shrink-0 text-xs', c.ok ? 'text-muted' : 'font-semibold text-expense')}>
+                  {c.ok ? `${when(c.checkedAt)} · ${size(c.sizeBytes)}` : `falló ${when(c.checkedAt)}`}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-muted">Para comprobarlo a mano: deploy\casa\verificar-respaldo.ps1. Restaurar uno: deploy\casa\restaurar.ps1.</p>
+        </>
       )}
     </section>
   );

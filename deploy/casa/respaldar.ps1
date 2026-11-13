@@ -4,7 +4,8 @@
 Revisar-Docker
 Revisar-Copia
 
-Compose @('exec', '-T', 'backup', 'sh', '-c', 'f=/backups/finanzas-$(date +%F-%H%M).sql.gz; pg_dump --no-owner | gzip > $f.tmp && mv $f.tmp $f && echo Respaldo creado: $f')
+# Respalda y lo verifica restaurándolo en una base aparte
+Compose @('exec', '-T', 'backup', 'sh', '-c', "tr -d '\r' < /respaldo.sh | sh -s ahora")
 $carpeta = ((Get-Content $EnvFile | Where-Object { $_ -like 'BACKUP_DIR=*' }) -replace 'BACKUP_DIR=', '') -replace '/', '\'
 Write-Host "Carpeta de respaldos: $carpeta"
 Invoke-Item $carpeta

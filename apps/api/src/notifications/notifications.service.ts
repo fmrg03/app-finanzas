@@ -1,5 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { NotificationType, Prisma } from '@prisma/client';
+import { BACKUP_STALE_DAYS } from '../backups/backups.module';
 import { BudgetsService } from '../budgets/budgets.service';
 import { goalPlan, previousMonth } from '../goals/goal-plan';
 import { parseDateOnly, toDateOnly, todayLocal } from '../common/date.util';
@@ -102,6 +103,7 @@ export class NotificationsService {
       ...(await this.reserveCandidates(userId)),
       ...(await this.unusualCandidates(userId)),
       ...(await this.summaryCandidates(userId)),
+      ...(await this.backupCandidates(userId)),
     ];
     if (!candidates.length) return 0;
     const { count } = await this.prisma.notification.createMany({
@@ -223,6 +225,36 @@ export class NotificationsService {
         title: `${names.get(c)} va muy por encima de lo normal`,
         body: `Llevas ${usd(e.now)} este mes en ${names.get(c)}; en los últimos 3 meses fueron unos ${usd(avg)} al mes (${Math.round((e.now / avg) * 100)}\u00a0%). Si quieres ponerle un tope, crea un presupuesto.`,
         link: '/presupuestos',
+      });
+    }
+    return out;
+  }
+
+  /** Solo a quien administra: el último respaldo falló, o hace días que no hay uno verificado. */
+  private async backupCandidates(userId: string): Promise<Candidate[]> {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { role: true } });
+    if (user?.role !== 'ADMIN') return [];
+    const last = await this.prisma.backupCheck.findFirst({ orderBy: { checkedAt: 'desc' } });
+    if (!last) return []; // Sin respaldos configurados (desarrollo)
+    const out: Candidate[] = [];
+    if (!last.ok) {
+      out.push({
+        type: 'BACKUP_FAILED',
+        dedupeKey: `backup:fail:${last.id}`,
+        title: 'El último respaldo no sirve',
+        body: `${last.file}: ${(last.error ?? 'no se pudo restaurar').slice(0, 160)}. En la PC corre deploy\\casa\\respaldar.ps1 para intentarlo de nuevo.`,
+        link: '/ajustes#respaldos',
+      });
+    }
+    const ok = last.ok ? last : await this.prisma.backupCheck.findFirst({ where: { ok: true }, orderBy: { checkedAt: 'desc' } });
+    const days = Math.floor((Date.now() - (ok ?? last).checkedAt.getTime()) / 86_400_000);
+    if (days >= BACKUP_STALE_DAYS) {
+      out.push({
+        type: 'BACKUP_STALE',
+        dedupeKey: `backup:stale:${ok?.id ?? last.id}`,
+        title: `Hace ${days} días que no hay un respaldo bueno`,
+        body: ok ? `El último verificado es del ${dmy(ok.checkedAt)}. Revisa que la PC y Docker Desktop estén encendidos.` : 'Ningún respaldo se ha podido verificar todavía.',
+        link: '/ajustes#respaldos',
       });
     }
     return out;

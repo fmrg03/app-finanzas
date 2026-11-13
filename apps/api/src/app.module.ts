@@ -11,6 +11,7 @@ import { CategoriesModule } from './categories/categories.module';
 import { ExchangeRatesModule } from './exchange-rates/exchange-rates.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { StatsModule } from './stats/stats.module';
+import { BackupsModule } from './backups/backups.module';
 import { ExportAllModule } from './export/export-all.module';
 import { ImportsModule } from './imports/imports.module';
 import { ReceiptsModule } from './receipts/receipts.module';
@@ -52,6 +53,7 @@ class HealthController {
     ReceiptsModule,
     ImportsModule,
     ExportAllModule,
+    BackupsModule,
     TransfersModule,
     RecurringModule,
     BudgetsModule,

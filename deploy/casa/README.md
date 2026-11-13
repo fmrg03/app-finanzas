@@ -101,6 +101,7 @@ No hay que hacer nada: si la PC está encendida, la app está disponible.
 |---|---|
 | Publicar cambios nuevos (commitea en `main` primero) | `powershell -ExecutionPolicy Bypass -File deploy\casa\iniciar.ps1` |
 | Respaldo ahora mismo | `powershell -ExecutionPolicy Bypass -File deploy\casa\respaldar.ps1` |
+| Comprobar que el último respaldo sirve | `powershell -ExecutionPolicy Bypass -File deploy\casa\verificar-respaldo.ps1` |
 | Ver si está corriendo | `docker compose -p finanzas-casa ps` |
 | Ver errores de la API | `docker compose -p finanzas-casa logs api --tail 50` |
 | Detenerla un rato | `docker compose -p finanzas-casa stop` |
@@ -109,6 +110,7 @@ No hay que hacer nada: si la PC está encendida, la app está disponible.
 ## Respaldos
 
 - **Automáticos:** el primero de cada día se hace apenas la app está encendida, como `finanzas-AAAA-MM-DD.sql.gz` en tu carpeta. Se borran los de más de 30 días.
+- **Verificados:** cada respaldo se restaura en una base aparte (`finanzas_verificacion`, que se borra al terminar) para comprobar que sirve, y se cuenta lo que trae. El resultado se ve en **Ajustes > Respaldos** (solo quien administra), y la campanita avisa si un respaldo no se pudo restaurar o si pasan 3 días sin uno bueno (por ejemplo, la PC estuvo apagada).
 - **Restaurar uno:** sobre una base vacía o para volver atrás. El archivo tiene que estar en la carpeta de respaldos, y **reemplaza todos los datos actuales**.
   ```powershell
   powershell -ExecutionPolicy Bypass -File deploy\casa\restaurar.ps1 finanzas-2026-11-06.sql.gz

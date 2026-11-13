@@ -74,22 +74,9 @@ services:
       - type: bind
         source: ${BACKUP_DIR}
         target: /backups
-    entrypoint: ["/bin/sh", "-c"]
-    # Al encender la PC respalda si hoy no hay respaldo; luego revisa cada hora
-    command:
-      - |
-        while true; do
-          f=/backups/finanzas-$$(date +%F).sql.gz
-          if [ ! -s "$$f" ]; then
-            if pg_dump --no-owner | gzip > "$$f.tmp" && mv "$$f.tmp" "$$f"; then
-              echo "Respaldo creado: $$f"
-            else
-              echo "Falló el respaldo" >&2; rm -f "$$f.tmp"
-            fi
-            find /backups -name 'finanzas-*.sql.gz' -mtime +$$KEEP_DAYS -delete
-          fi
-          sleep 3600
-        done
+      - ./respaldo.sh:/respaldo.sh:ro
+    # Respaldo diario verificado (restaurándolo en una base aparte); ver respaldo.sh
+    entrypoint: ["/bin/sh", "-c", "tr -d '\\r' < /respaldo.sh > /tmp/respaldo.sh && exec sh /tmp/respaldo.sh"]
 
   # Une web y API en una sola dirección. El Caddyfile va dentro de la imagen para no depender de la carpeta.
   proxy:

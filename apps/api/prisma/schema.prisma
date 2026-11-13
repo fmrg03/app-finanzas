@@ -80,6 +80,8 @@ enum NotificationType {
   POSSIBLE_DUPLICATE
   CATEGORY_SPIKE
   MONTH_SUMMARY
+  BACKUP_FAILED
+  BACKUP_STALE
 }
 
 enum SharedRequestKind {
@@ -656,4 +658,20 @@ model Invitation {
 
   user      User? @relation("InvitationTarget", fields: [userId], references: [id], onDelete: Cascade)
   createdBy User  @relation("InvitationCreator", fields: [createdById], references: [id], onDelete: Cascade)
+}
+
+// Resultado de cada verificación de respaldo: lo escribe el contenedor de respaldos (deploy/casa/respaldo.sh)
+// después de restaurar el archivo en una base aparte y contar lo que trae.
+model BackupCheck {
+  id           String   @id
+  checkedAt    DateTime @default(now())
+  file         String
+  ok           Boolean
+  sizeBytes    BigInt?
+  users        Int?
+  accounts     Int?
+  transactions Int?
+  error        String?
+
+  @@index([checkedAt])
 }
