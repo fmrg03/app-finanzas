@@ -42,7 +42,7 @@ export class FxService {
     if (!accounts.length) return { pools, events, avgRate: () => null as Dec | null };
     const ids = accounts.map((a) => a.id);
 
-    const [txs, transfers, pays, bcv] = await Promise.all([
+    const [txs, transfers, pays, bcv, adjusts] = await Promise.all([
       this.prisma.transaction.findMany({
         where: { userId, accountId: { in: ids } },
         select: { id: true, type: true, date: true, createdAt: true, accountId: true, amountUsd: true, amountVes: true },
@@ -56,6 +56,7 @@ export class FxService {
         select: { date: true, createdAt: true, accountId: true, amount: true, accountAmount: true, debt: { select: { direction: true, currency: true } } },
       }),
       this.prisma.exchangeRate.findMany({ where: { source: 'BCV' }, orderBy: { date: 'asc' }, select: { date: true, rate: true } }),
+      this.prisma.reconciliation.findMany({ where: { accountId: { in: ids }, adjustment: { not: 0 } }, select: { accountId: true, date: true, createdAt: true, adjustment: true } }),
     ]);
     // BCV del día o el último anterior (o el primero que haya)
     const bcvOn = (d: Date) => {
@@ -145,6 +146,18 @@ export class FxService {
           if (p.debt.currency === 'USD') {
             events.push({ date: toDateOnly(p.date), accountId: p.accountId!, kind: 'DEBT', bs, valueUsd: usd, costUsd: cost, gainUsd: usd.sub(cost) });
           }
+        },
+      });
+    }
+    // Ajustes de conciliación: lo que sobraba entra a BCV del día; lo que faltaba sale al costo promedio
+    for (const a of adjusts) {
+      steps.push({
+        date: a.date, pri: a.adjustment.gt(0) ? 0 : 2, at: a.createdAt,
+        run: () => {
+          const r = bcvOn(a.date);
+          const pool = pools.get(a.accountId)!;
+          if (a.adjustment.gt(0)) put(pool, a.adjustment, r ? a.adjustment.div(r) : Z());
+          else take(pool, a.adjustment.neg(), r ? a.adjustment.neg().div(r) : Z());
         },
       });
     }

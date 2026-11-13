@@ -2,7 +2,7 @@ import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Pa
 import { ApiBearerAuth, ApiQuery, ApiTags } from '@nestjs/swagger';
 import { AuthUser, CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AccountsService } from './accounts.service';
-import { CreateAccountDto, UpdateAccountDto } from './dto/account.dto';
+import { CreateAccountDto, ReconcileDto, UpdateAccountDto } from './dto/account.dto';
 
 @ApiTags('accounts') @ApiBearerAuth()
 @Controller('accounts')
@@ -13,6 +13,21 @@ export class AccountsController {
   @ApiQuery({ name: 'includeArchived', required: false, type: Boolean })
   findAll(@CurrentUser() u: AuthUser, @Query('includeArchived', new ParseBoolPipe({ optional: true })) includeArchived?: boolean) {
     return this.accounts.findAll(u.id, includeArchived);
+  }
+
+  @Post(':id/reconcile')
+  reconcile(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: ReconcileDto) {
+    return this.accounts.reconcile(u.id, id, dto);
+  }
+
+  @Get(':id/reconciliations')
+  reconciliations(@CurrentUser() u: AuthUser, @Param('id') id: string) {
+    return this.accounts.reconciliations(u.id, id);
+  }
+
+  @Delete('reconciliations/:recId') @HttpCode(204)
+  removeReconciliation(@CurrentUser() u: AuthUser, @Param('recId') recId: string) {
+    return this.accounts.removeReconciliation(u.id, recId);
   }
 
   @Get(':id/summary')

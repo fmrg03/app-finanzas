@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { parseDateOnly } from '../common/date.util';
+import { parseDateOnly, todayLocal } from '../common/date.util';
 import { FxService } from '../fx/fx.module';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAccountDto, UpdateAccountDto } from './dto/account.dto';
@@ -21,13 +21,19 @@ export class AccountsService {
       _sum: { amountUsd: true, amountVes: true },
     });
     // Las transferencias y los abonos de deudas mueven saldo sin ser ingreso ni gasto
-    const [outs, ins, debtPays] = await Promise.all([
+    const [outs, ins, debtPays, adjusts, lastRec] = await Promise.all([
       this.prisma.transfer.groupBy({ by: ['fromAccountId'], where: { userId }, _sum: { fromAmount: true } }),
       this.prisma.transfer.groupBy({ by: ['toAccountId'], where: { userId }, _sum: { toAmount: true } }),
       this.prisma.debtPayment.findMany({
         // Si el abono generó un gasto o ingreso, ese movimiento ya mueve el saldo
         where: { accountId: { not: null }, transactionId: null, debt: { userId } },
         select: { accountId: true, amount: true, accountAmount: true, debt: { select: { direction: true } } },
+      }),
+      // Ajustes de conciliación: solo mueven el saldo
+      this.prisma.reconciliation.groupBy({ by: ['accountId'], where: { account: { userId } }, _sum: { adjustment: true } }),
+      this.prisma.reconciliation.findMany({
+        where: { account: { userId } }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], distinct: ['accountId'],
+        select: { accountId: true, date: true, realBalance: true, adjustment: true },
       }),
     ]);
     const reserved = await this.reservedByAccount(userId);
@@ -44,10 +50,14 @@ export class AccountsService {
         const v = p.accountAmount ?? p.amount;
         balance = p.debt.direction === 'OWED_TO_ME' ? balance.add(v) : balance.sub(v);
       }
+      balance = balance.add(adjusts.find((a) => a.accountId === acc.id)?._sum.adjustment ?? 0);
+      const rec = lastRec.find((r) => r.accountId === acc.id);
       const res = reserved.filter((x) => x.accountId === acc.id).map((x) => ({ ...x, amount: x.inCurrency(acc.currency) }));
       return {
         ...acc,
         balance: balance.toFixed(2),
+        // Última conciliación con el saldo real
+        lastReconciliation: rec ? { date: rec.date.toISOString().slice(0, 10), realBalance: rec.realBalance.toFixed(2), adjustment: rec.adjustment.toFixed(2) } : null,
         // Cuentas en Bs: tasa promedio a la que compraste los bolívares que tiene
         costRate: costRates.get(acc.id)?.toFixed(2) ?? null,
         // Apartado para pagos de varios meses: sigue en la cuenta, pero ya tiene destino
@@ -55,6 +65,36 @@ export class AccountsService {
         reservedFor: res.map((x) => ({ recurringId: x.recurringId, description: x.description, amount: x.amount.toFixed(2) })),
       };
     });
+  }
+
+  /**
+   * Concilias con el saldo real que ves en el banco: si no cuadra, la diferencia se registra como ajuste
+   * (mueve el saldo, no es ingreso ni gasto). Si cuadra, queda anotado que cuadró ese día.
+   */
+  async reconcile(userId: string, id: string, dto: { realBalance: string; date?: string; note?: string }) {
+    const date = dto.date ?? todayLocal();
+    if (date > todayLocal()) throw new BadRequestException('La fecha no puede ser futura');
+    const real = new Prisma.Decimal(dto.realBalance);
+    const s = await this.summary(userId, id, '1900-01-01', date);
+    const app = new Prisma.Decimal(s.closing);
+    const rec = await this.prisma.reconciliation.create({
+      data: { accountId: id, date: parseDateOnly(date), realBalance: real, appBalance: app, adjustment: real.sub(app), note: dto.note?.trim() || null },
+    });
+    return present(rec);
+  }
+
+  async reconciliations(userId: string, id: string) {
+    const acc = await this.prisma.account.findFirst({ where: { id, userId } });
+    if (!acc) throw new NotFoundException('Cuenta no encontrada');
+    const rows = await this.prisma.reconciliation.findMany({ where: { accountId: id }, orderBy: [{ date: 'desc' }, { createdAt: 'desc' }], take: 50 });
+    return rows.map(present);
+  }
+
+  /** Deshace una conciliación (y su ajuste). */
+  async removeReconciliation(userId: string, recId: string) {
+    const rec = await this.prisma.reconciliation.findFirst({ where: { id: recId, account: { userId } } });
+    if (!rec) throw new NotFoundException('Conciliación no encontrada');
+    await this.prisma.reconciliation.delete({ where: { id: recId } });
   }
 
   /**
@@ -68,7 +108,7 @@ export class AccountsService {
     const D = Prisma.Decimal;
     const z = new D(0);
     const flows = async (date: Prisma.DateTimeFilter) => {
-      const [tx, outs, ins, pays] = await Promise.all([
+      const [tx, outs, ins, pays, adj] = await Promise.all([
         this.prisma.transaction.groupBy({ by: ['type'], where: { userId, accountId: id, date }, _sum: { amountUsd: true, amountVes: true } }),
         this.prisma.transfer.aggregate({ where: { userId, fromAccountId: id, date }, _sum: { fromAmount: true } }),
         this.prisma.transfer.aggregate({ where: { userId, toAccountId: id, date }, _sum: { toAmount: true } }),
@@ -76,6 +116,7 @@ export class AccountsService {
           where: { accountId: id, transactionId: null, debt: { userId }, date },
           select: { amount: true, accountAmount: true, debt: { select: { direction: true } } },
         }),
+        this.prisma.reconciliation.aggregate({ where: { accountId: id, date }, _sum: { adjustment: true } }),
       ]);
       const t = (type: 'INCOME' | 'EXPENSE') => {
         const s = tx.find((x) => x.type === type)?._sum;
@@ -86,8 +127,9 @@ export class AccountsService {
         income: t('INCOME'), expense: t('EXPENSE'),
         transfersIn: new D(ins._sum.toAmount ?? 0), transfersOut: new D(outs._sum.fromAmount ?? 0),
         paymentsIn: pay('OWED_TO_ME'), paymentsOut: pay('I_OWE'),
+        adjustments: new D(adj._sum.adjustment ?? 0),
       };
-      return { ...f, net: f.income.sub(f.expense).add(f.transfersIn).sub(f.transfersOut).add(f.paymentsIn).sub(f.paymentsOut) };
+      return { ...f, net: f.income.sub(f.expense).add(f.transfersIn).sub(f.transfersOut).add(f.paymentsIn).sub(f.paymentsOut).add(f.adjustments) };
     };
     const before = await flows({ lt: parseDateOnly(from) });
     const period = await flows({ gte: parseDateOnly(from), lte: parseDateOnly(to) });
@@ -101,6 +143,7 @@ export class AccountsService {
       income: fx(period.income), expense: fx(period.expense),
       transfersIn: fx(period.transfersIn), transfersOut: fx(period.transfersOut),
       paymentsIn: fx(period.paymentsIn), paymentsOut: fx(period.paymentsOut),
+      adjustments: fx(period.adjustments),
       closing: fx(closing),
       // Saldo de hoy, contando lo registrado con fecha posterior al período
       current: fx(closing.add(after.net)),
@@ -178,4 +221,11 @@ export class AccountsService {
     if (used) throw new ConflictException(`La cuenta tiene ${used} movimientos, transferencias o abonos; archívala en lugar de borrarla`);
     await this.prisma.account.delete({ where: { id } });
   }
+}
+
+function present(r: { id: string; accountId: string; date: Date; realBalance: Prisma.Decimal; appBalance: Prisma.Decimal; adjustment: Prisma.Decimal; note: string | null; createdAt: Date }) {
+  return {
+    id: r.id, accountId: r.accountId, date: r.date.toISOString().slice(0, 10), note: r.note, createdAt: r.createdAt,
+    realBalance: r.realBalance.toFixed(2), appBalance: r.appBalance.toFixed(2), adjustment: r.adjustment.toFixed(2),
+  };
 }

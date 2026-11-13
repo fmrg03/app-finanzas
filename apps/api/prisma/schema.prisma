@@ -194,8 +194,28 @@ model Account {
   debtPayments     DebtPayment[]
   installmentPlans InstallmentPlan[] @relation("PlanAccount")
   myPartPlans      InstallmentPlan[] @relation("PlanMyAccount")
+  reconciliations  Reconciliation[]
 
   @@unique([userId, name])
+}
+
+// Conciliación: el saldo real que viste en el banco ese día. Si no cuadraba, la diferencia
+// ajusta el saldo de la cuenta (no cuenta como ingreso ni gasto).
+model Reconciliation {
+  id          String   @id @default(cuid())
+  accountId   String
+  date        DateTime @db.Date
+  // Saldo real informado y el que tenía la app en ese momento, en la moneda de la cuenta
+  realBalance Decimal  @db.Decimal(18, 2)
+  appBalance  Decimal  @db.Decimal(18, 2)
+  // realBalance - appBalance: lo que se ajusta (0 si cuadró)
+  adjustment  Decimal  @db.Decimal(18, 2)
+  note        String?
+  createdAt   DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId, date])
 }
 
 model Category {

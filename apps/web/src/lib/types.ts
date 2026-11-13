@@ -13,6 +13,8 @@ export interface Account {
   archivedAt: string | null;
   /** Cuentas en Bs: tasa promedio (Bs por USD) a la que compraste los bolívares que tiene */
   costRate: string | null;
+  /** Última vez que comparaste con el saldo real */
+  lastReconciliation: { date: string; realBalance: string; adjustment: string } | null;
   /** Apartado para pagos de varios meses: sigue en la cuenta, pero ya tiene destino */
   reserved: string;
   reservedFor: { recurringId: string; description: string; amount: string }[];
@@ -384,6 +386,8 @@ export interface AccountSummary {
   transfersOut: string;
   paymentsIn: string;
   paymentsOut: string;
+  /** Ajustes de conciliación del período */
+  adjustments: string;
   closing: string;
   current: string;
 }
@@ -409,4 +413,15 @@ export interface SharedRequest {
   totalUsd: string;
   installments: { provider: string; store: string | null; count: number; frequency: string; downPaymentUsd: string } | null;
   parts: { role: 'CREATOR' | 'PAYER' | 'OTHER'; name: string; amountUsd: string; pct: string; me: boolean }[];
+}
+
+export interface Reconciliation {
+  id: string;
+  accountId: string;
+  date: string;
+  realBalance: string;
+  appBalance: string;
+  adjustment: string;
+  note: string | null;
+  createdAt: string;
 }

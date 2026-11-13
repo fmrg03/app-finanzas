@@ -323,6 +323,7 @@ function AccountFlow({ id, from, to }: { id: string; from: string; to: string })
       ['Ingresos', s.income, 1], ['Gastos (monto completo)', s.expense, -1],
       ['Transferencias recibidas', s.transfersIn, 1], ['Transferencias enviadas', s.transfersOut, -1],
       ['Abonos de deudas recibidos', s.paymentsIn, 1], ['Abonos de deudas pagados', s.paymentsOut, -1],
+      ['Ajustes de conciliación', String(Math.abs(Number(s.adjustments))), Number(s.adjustments) >= 0 ? 1 : -1],
     ] as [string, string, 1 | -1][]
   ).filter(([, v]) => Number(v) !== 0);
   return (
