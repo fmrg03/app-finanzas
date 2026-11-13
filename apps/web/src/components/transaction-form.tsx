@@ -47,7 +47,29 @@ function fromTx(tx: Transaction): FormState {
 
 const parseTags = (s: string) => s.split(',').map((t) => t.trim()).filter(Boolean);
 // Acepta coma o punto como separador decimal ("12,50" o "12.50")
-const normAmount = (s: string) => s.trim().replace(/\s/g, '').replace(',', '.');
+/** Un número escrito a la venezolana o con punto: "1.234,56", "1234,56" o "1234.56". */
+const parseNum = (t: string) => Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t);
+
+/**
+ * El monto admite sumas y restas para juntar varios montos: "12,50+8+3,75" o "100-15".
+ * Devuelve el total con punto decimal ("24.25"), o "NaN" si no se entiende.
+ */
+const normAmount = (s: string) => {
+  const t = s.replace(/\s/g, '');
+  if (!t) return '';
+  if (!/^[+-]?[\d.,]+([+-][\d.,]+)*[+-]?$/.test(t)) return 'NaN';
+  let total = 0;
+  const terms = [...t.matchAll(/([+-]?)([\d.,]+)/g)];
+  for (const [, sign, n] of terms) {
+    const v = parseNum(n);
+    if (!Number.isFinite(v)) return 'NaN';
+    total += sign === '-' ? -v : v;
+  }
+  // Un solo número se deja tal cual (una tasa puede tener más decimales); una suma, a centavos
+  return String(terms.length > 1 ? Math.round(total * 100) / 100 : total);
+};
+/** Si el monto es una suma o resta, el total para mostrarlo. */
+const isSum = (s: string) => /\d[+-]\d/.test(s.replace(/\s/g, ''));
 
 export function TransactionForm({
   tx, onDone, onTransfer, initialType, startWith, proposePlan,
@@ -81,6 +103,7 @@ export function TransactionForm({
   // Inicial de una compra en cuotas, o cuota que se registró sola: los montos los define la compra
   // Copia de una compra de un familiar en modo "proponer cambio": se edita como si fuera nueva y se le envía
   const [proposing, setProposing] = useState(!!proposePlan);
+  const amountRef = useRef<HTMLInputElement>(null);
   const [loadingDraft, setLoadingDraft] = useState(false);
   const locked = !proposing && ((!!tx?.installmentPlanId && (!tx.installment || !tx.accountId)) || !!tx?.shared?.mirrorOf || !!tx?.debtPayment);
   const [sharedOn, setSharedOn] = useState(isShared || startWith === 'shared');
@@ -444,10 +467,28 @@ export function TransactionForm({
             value={s.amount}
             onChange={(e) => set('amount', e.target.value)}
             disabled={locked}
+            ref={amountRef}
             className="min-w-0 flex-1 bg-transparent text-3xl font-extrabold tabular-nums outline-none placeholder:text-line disabled:opacity-60"
           />
+          {!locked && (
+            // El teclado numérico del teléfono no trae "+": este botón agrega otro monto a sumar
+            <button
+              type="button"
+              onClick={() => { set('amount', s.amount.replace(/[+-]\s*$/, '') + (s.amount.trim() ? '+' : '')); amountRef.current?.focus(); }}
+              aria-label="Sumar otro monto"
+              title="Sumar otro monto"
+              className="grid size-10 shrink-0 place-items-center rounded-full bg-canvas text-xl font-bold text-muted hover:text-accent"
+            >
+              +
+            </button>
+          )}
           {!locked && <Segmented label="Moneda" value={s.currency} onChange={(v) => set('currency', v)} options={[{ value: 'USD', label: 'USD' }, { value: 'VES', label: 'Bs' }]} />}
         </div>
+        {isSum(s.amount) && (
+          <p className="text-sm text-muted">
+            {Number.isFinite(amountNum) ? <>Total: <strong className="tabular-nums text-ink">{money(amountNum, s.currency)}</strong></> : <span className="text-expense">No se entiende la suma</span>}
+          </p>
+        )}
         <RateLine preview={preview} source={s.rateSource} rateQ={rateQ} manual={s.rateSource === 'MANUAL'} manualRate={effRate} />
         {tx && !proposing && tx.sharePct !== null && (
           <p className="mt-1 text-sm text-muted">Tu parte: <strong className="text-ink">{money(tx.myAmountUsd, 'USD')}</strong> ({money(tx.myAmountVes, 'VES')})</p>

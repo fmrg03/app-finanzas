@@ -130,7 +130,7 @@ export function InstallmentEditor({
 }
 
 /** Plataformas conocidas; se suman las que ya usaste. */
-const PROVIDERS = ['Cashea', 'Krece', 'Lysto'];
+const PROVIDERS = ['Cashea', 'Compra A Cuotas'];
 const OTHER = '__otra';
 
 /** Plataforma de cuotas: una lista con las conocidas y las que ya usaste, o "Otra…" para escribirla. */
