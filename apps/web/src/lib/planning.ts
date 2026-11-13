@@ -5,7 +5,7 @@ import { api } from './api';
 import type { BudgetStatus, Debt, DebtPaymentItem, Goal, InstallmentPlan, Member, NetWorth, PendingInvitation, Person, Projection, Recurring, SharedRequest, Transfer, UpcomingInstallments } from './types';
 
 /** Todo lo que cambia saldos o totales: se refresca junto. */
-function useInvalidateAll() {
+export function useInvalidateAll() {
   const qc = useQueryClient();
   return () => {
     for (const k of ['transactions', 'accounts', 'transfers', 'recurring', 'budgets', 'net-worth', 'notifications', 'debts', 'people', 'installments', 'family', 'projection', 'shared-requests']) qc.invalidateQueries({ queryKey: [k] });

@@ -3,5 +3,5 @@ import { ExchangeRatesModule } from '../exchange-rates/exchange-rates.module';
 import { TransfersController } from './transfers.controller';
 import { TransfersService } from './transfers.service';
 
-@Module({ imports: [ExchangeRatesModule], controllers: [TransfersController], providers: [TransfersService] })
+@Module({ imports: [ExchangeRatesModule], controllers: [TransfersController], providers: [TransfersService], exports: [TransfersService] })
 export class TransfersModule {}

@@ -1,4 +1,4 @@
-import { ArrowLeftRight, CalendarRange, ChartPie, Coins, Goal, HandCoins, LandPlot, Menu, Repeat, Settings, Tags, Target, Wallet } from 'lucide-react';
+import { ArrowLeftRight, CalendarRange, ChartPie, Coins, FileUp, Goal, HandCoins, LandPlot, Menu, Repeat, Settings, Tags, Target, Wallet } from 'lucide-react';
 
 export const NAV_GROUPS = [
   {
@@ -8,6 +8,7 @@ export const NAV_GROUPS = [
       { href: '/movimientos', label: 'Movimientos', icon: ArrowLeftRight },
       { href: '/cuentas', label: 'Cuentas', icon: Wallet },
       { href: '/patrimonio', label: 'Patrimonio', icon: LandPlot },
+      { href: '/importar', label: 'Importar del banco', icon: FileUp },
     ],
   },
   {

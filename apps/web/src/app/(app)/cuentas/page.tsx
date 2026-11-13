@@ -1,7 +1,8 @@
 'use client';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CheckCircle2, Plus, Scale } from 'lucide-react';
+import { CheckCircle2, FileUp, Plus, Scale } from 'lucide-react';
+import Link from 'next/link';
 import { useState, type FormEvent } from 'react';
 import { Button, ErrorNote, Field, Input, Select } from '@/components/ui/controls';
 import { Dialog } from '@/components/ui/dialog';
@@ -67,6 +68,15 @@ export default function CuentasPage() {
                 >
                   <Scale size={18} /> Conciliar
                 </button>
+              )}
+              {!a.archivedAt && (
+                <Link
+                  href={`/importar?cuenta=${a.id}`}
+                  title="Importar el estado de cuenta del banco"
+                  className="flex w-20 shrink-0 flex-col items-center justify-center gap-0.5 border-l border-line text-xs font-semibold text-accent hover:bg-canvas/60"
+                >
+                  <FileUp size={18} /> Importar
+                </Link>
               )}
             </li>
           ))}
