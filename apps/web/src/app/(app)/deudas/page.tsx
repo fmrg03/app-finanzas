@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, CreditCard, Link2, MessageCircle, Pencil, Plus, Trash2, Users } from 'lucide-react';
+import { Check, CreditCard, Link2, MessageCircle, Pencil, Plus, Scale, Trash2, Users } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Progress } from '@/components/progress';
 import { SharePanel, useTodayBcv } from '@/components/share-panel';
@@ -549,11 +549,13 @@ function PeopleTab() {
   const rate = useTodayBcv();
   const [editing, setEditing] = useState<Person | null>(null);
   const del = useApiMutation((id: string) => api(`/people/${id}`, { method: 'DELETE' }));
+  const settle = useApiMutation((b: { personId: string; currency: Currency }) => api('/debts/settle', { method: 'POST', json: b }));
 
   return (
     <>
       {error && <div className="mt-4"><ErrorNote>{error.message}</ErrorNote></div>}
       {del.error && <div className="mt-4"><ErrorNote>{del.error.message}</ErrorNote></div>}
+      {settle.error && <div className="mt-4"><ErrorNote>{settle.error.message}</ErrorNote></div>}
       {!isPending && !data.length && (
         <p className="mt-4 rounded-2xl border border-dashed border-line px-6 py-10 text-center text-sm text-muted">
           Agrega a las personas con las que compartes gastos. Con su WhatsApp, el detalle les llega directo.
@@ -564,6 +566,12 @@ function PeopleTab() {
           {data.map((p) => {
             const owes = Number(p.owedToMeUsd) > 0 || Number(p.owedToMeVes) > 0;
             const iOwe = Number(p.iOweUsd) > 0 || Number(p.iOweVes) > 0;
+            // Deudas en ambos sentidos en la misma moneda: se pueden compensar
+            const nets = (['USD', 'VES'] as const).flatMap((c) => {
+              const mine = Number(c === 'USD' ? p.owedToMeUsd : p.owedToMeVes);
+              const theirs = Number(c === 'USD' ? p.iOweUsd : p.iOweVes);
+              return mine > 0 && theirs > 0 ? [{ c, mine, theirs, offset: Math.min(mine, theirs), net: mine - theirs }] : [];
+            });
             return (
               <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
                 <div className="min-w-0 flex-1">
@@ -578,6 +586,27 @@ function PeopleTab() {
                   {iOwe && <p className="text-expense">le debes {[Number(p.iOweUsd) > 0 && money(p.iOweUsd, 'USD'), Number(p.iOweVes) > 0 && money(p.iOweVes, 'VES')].filter(Boolean).join(' + ')}</p>}
                   {!owes && !iOwe && <p className="text-muted">al día</p>}
                 </div>
+                {nets.map((n) => (
+                  <div key={n.c} className="order-last flex w-full flex-wrap items-center justify-between gap-2 rounded-xl bg-canvas px-3 py-2 text-sm">
+                    <p>
+                      Te debe {money(n.mine, n.c)} y le debes {money(n.theirs, n.c)}:{' '}
+                      <b className={n.net > 0 ? 'text-income' : n.net < 0 ? 'text-expense' : ''}>
+                        {n.net > 0 ? `te queda debiendo ${money(n.net, n.c)}` : n.net < 0 ? `le quedas debiendo ${money(-n.net, n.c)}` : 'quedan a mano'}
+                      </b>
+                    </p>
+                    <Button
+                      variant="ghost"
+                      className="h-8"
+                      disabled={settle.isPending}
+                      onClick={() =>
+                        confirm(`Se anotan abonos por ${money(n.offset, n.c)} en ambos lados, sin mover tus cuentas${p.linkedUser ? `, y a ${p.name} le aparecen también` : ''}. ¿Saldar?`) &&
+                        settle.mutate({ personId: p.id, currency: n.c })
+                      }
+                    >
+                      <Scale size={14} /> Saldar
+                    </Button>
+                  </div>
+                ))}
                 <div className="flex items-center gap-1">
                   {owes && (
                     <button onClick={() => shareWhatsApp(personReminderText(p, debts, rate), p.phone)} aria-label={`Recordar a ${p.name} por WhatsApp`} className="grid size-9 place-items-center rounded-lg text-income hover:bg-income-soft">

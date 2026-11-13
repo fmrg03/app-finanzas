@@ -36,6 +36,14 @@ class CreateDebtDto {
   dueDate?: string | null;
 }
 class UpdateDebtDto extends PartialType(CreateDebtDto) {}
+class SettleDto {
+  @ApiProperty() @IsString()
+  personId: string;
+
+  @ApiProperty({ enum: Currency }) @IsEnum(Currency)
+  currency: Currency;
+}
+
 class PaymentDto {
   @ApiProperty({ example: '40.00' }) @IsNumberString()
   amount: string;
@@ -332,6 +340,44 @@ class DebtsService {
   }
 
   /** Marca como saldada cuando lo abonado cubre el total, y la reabre si deja de cubrirlo. */
+  /**
+   * Saldar cuentas con una persona: lo que te debe y lo que le debes (en la misma moneda) se compensan.
+   * Se anotan abonos sin cuenta por el monto menor en ambos lados, de las deudas más viejas a las más nuevas;
+   * en las deudas compartidas con un familiar el abono le aparece también a él.
+   */
+  async settleWithPerson(userId: string, dto: SettleDto) {
+    const person = await this.people.own(userId, dto.personId);
+    const debts = await this.prisma.debt.findMany({
+      where: { userId, personId: person.id, currency: dto.currency, settledAt: null },
+      include: { payments: { select: { amount: true } } },
+      orderBy: [{ dueDate: { sort: 'asc', nulls: 'last' } }, { createdAt: 'asc' }],
+    });
+    const open = debts
+      .map((d) => ({ d, rem: d.amount.sub(d.payments.reduce((a, x) => a.add(x.amount), new D(0))) }))
+      .filter((x) => x.rem.gt(0));
+    const mine = open.filter((x) => x.d.direction === 'OWED_TO_ME');
+    const theirs = open.filter((x) => x.d.direction === 'I_OWE');
+    const sum = (xs: typeof open) => xs.reduce((a, x) => a.add(x.rem), new D(0));
+    const offset = D.min(sum(mine), sum(theirs));
+    if (offset.lte(0)) throw new BadRequestException(`Con ${person.name} no hay deudas en ambos sentidos en ${dto.currency === 'USD' ? 'dólares' : 'bolívares'} para compensar`);
+    const date = todayLocal();
+    const note = `Compensado con ${person.name}`;
+    for (const side of [mine, theirs]) {
+      let left = offset;
+      for (const x of side) {
+        if (left.lte(0)) break;
+        const amt = D.min(left, x.rem);
+        await this.pay(userId, x.d.id, { amount: amt.toFixed(2), date, note });
+        left = left.sub(amt);
+      }
+    }
+    return {
+      offset: offset.toFixed(2),
+      owedToMe: sum(mine).sub(offset).toFixed(2),
+      iOwe: sum(theirs).sub(offset).toFixed(2),
+    };
+  }
+
   private async syncSettled(id: string) {
     const debt = await this.prisma.debt.findUniqueOrThrow({ where: { id } });
     const paid = (await this.prisma.debtPayment.aggregate({ where: { debtId: id }, _sum: { amount: true } }))._sum.amount ?? new D(0);
@@ -370,6 +416,7 @@ class DebtsController {
     return this.debts.paymentsBetween(u.id, from, to);
   }
   @Get() list(@CurrentUser() u: AuthUser) { return this.debts.list(u.id); }
+  @Post('settle') settle(@CurrentUser() u: AuthUser, @Body() dto: SettleDto) { return this.debts.settleWithPerson(u.id, dto); }
   @Post() create(@CurrentUser() u: AuthUser, @Body() dto: CreateDebtDto) { return this.debts.create(u.id, dto); }
   @Patch(':id') update(@CurrentUser() u: AuthUser, @Param('id') id: string, @Body() dto: UpdateDebtDto) { return this.debts.update(u.id, id, dto); }
   @Delete(':id') @HttpCode(204) remove(@CurrentUser() u: AuthUser, @Param('id') id: string) { return this.debts.remove(u.id, id); }
