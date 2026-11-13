@@ -37,46 +37,48 @@ export default function CuentasPage() {
         )}
         <ul className="divide-y divide-line overflow-hidden rounded-2xl bg-surface">
           {accounts.map((a) => (
-            <li key={a.id} className="flex items-stretch">
-              <button onClick={() => setEditing(a)} className={cn('flex min-w-0 flex-1 items-center gap-3 py-4 pl-4 pr-2 text-left hover:bg-canvas/60', a.archivedAt && 'opacity-60')}>
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-semibold">{a.name}</span>
-                  <span className="text-xs text-muted">{ACCOUNT_LABEL[a.type]}{a.archivedAt ? ', archivada' : ''}</span>
-                  <span className="block text-xs text-muted">
-                    {a.lastReconciliation ? `Conciliada el ${shortDate(a.lastReconciliation.date)}` : 'Nunca conciliada'}
-                  </span>
+            <li key={a.id} className="flex flex-col sm:flex-row sm:items-stretch">
+              <button onClick={() => setEditing(a)} className={cn('flex min-w-0 flex-1 flex-col gap-1 px-4 py-4 text-left hover:bg-canvas/60 sm:pr-2', a.archivedAt && 'opacity-60')}>
+                <span className="flex w-full items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate font-semibold">{a.name}</span>
+                  <span className={cn('shrink-0 text-lg font-extrabold tabular-nums', Number(a.balance) < 0 && 'text-expense')}>{money(a.balance, a.currency)}</span>
                 </span>
-                <span className="flex flex-col items-end">
-                  <span className={cn('text-lg font-extrabold tabular-nums', Number(a.balance) < 0 && 'text-expense')}>{money(a.balance, a.currency)}</span>
-                  {a.costRate && Number(a.balance) > 0 && (
-                    <span className="text-xs tabular-nums text-muted" title="Tasa promedio a la que compraste los bolívares de esta cuenta">
-                      Comprados a {rate(a.costRate)} Bs/$
+                <span className="flex w-full flex-wrap items-start justify-between gap-x-3 gap-y-0.5 text-xs text-muted">
+                  <span>
+                    {ACCOUNT_LABEL[a.type]}{a.archivedAt ? ', archivada' : ''} · {a.lastReconciliation ? `conciliada el ${shortDate(a.lastReconciliation.date)}` : 'nunca conciliada'}
+                  </span>
+                  {(a.costRate && Number(a.balance) > 0) || Number(a.reserved) > 0 ? (
+                    <span className="ml-auto flex flex-col items-end tabular-nums">
+                      {a.costRate && Number(a.balance) > 0 && (
+                        <span title="Tasa promedio a la que compraste los bolívares de esta cuenta">Comprados a {rate(a.costRate)} Bs/$</span>
+                      )}
+                      {Number(a.reserved) > 0 && (
+                        <span title={a.reservedFor.map((r) => `${r.description}: ${money(r.amount, a.currency)}`).join('\n')}>
+                          {money(a.reserved, a.currency)} apartado · libre {money(Number(a.balance) - Number(a.reserved), a.currency)}
+                        </span>
+                      )}
                     </span>
-                  )}
-                  {Number(a.reserved) > 0 && (
-                    <span className="text-xs tabular-nums text-muted" title={a.reservedFor.map((r) => `${r.description}: ${money(r.amount, a.currency)}`).join('\n')}>
-                      {money(a.reserved, a.currency)} apartado, libre {money(Number(a.balance) - Number(a.reserved), a.currency)}
-                    </span>
-                  )}
+                  ) : null}
                 </span>
               </button>
               {!a.archivedAt && (
-                <button
-                  onClick={() => setReconciling(a)}
-                  title="Comparar con el saldo real del banco"
-                  className="flex w-20 shrink-0 flex-col items-center justify-center gap-0.5 border-l border-line text-xs font-semibold text-accent hover:bg-canvas/60"
-                >
-                  <Scale size={18} /> Conciliar
-                </button>
-              )}
-              {!a.archivedAt && (
-                <Link
-                  href={`/importar?cuenta=${a.id}`}
-                  title="Importar el estado de cuenta del banco"
-                  className="flex w-20 shrink-0 flex-col items-center justify-center gap-0.5 border-l border-line text-xs font-semibold text-accent hover:bg-canvas/60"
-                >
-                  <FileUp size={18} /> Importar
-                </Link>
+                // En el teléfono, barra abajo; en pantallas grandes, columnas a la derecha
+                <span className="grid grid-cols-2 border-t border-line sm:flex sm:border-t-0">
+                  <button
+                    onClick={() => setReconciling(a)}
+                    title="Comparar con el saldo real del banco"
+                    className="flex items-center justify-center gap-1.5 py-2.5 text-sm font-semibold text-accent hover:bg-canvas/60 sm:w-20 sm:flex-col sm:gap-0.5 sm:border-l sm:border-line sm:py-0 sm:text-xs"
+                  >
+                    <Scale size={17} /> Conciliar
+                  </button>
+                  <Link
+                    href={`/importar?cuenta=${a.id}`}
+                    title="Importar el estado de cuenta del banco"
+                    className="flex items-center justify-center gap-1.5 border-l border-line py-2.5 text-sm font-semibold text-accent hover:bg-canvas/60 sm:w-20 sm:flex-col sm:gap-0.5 sm:py-0 sm:text-xs"
+                  >
+                    <FileUp size={17} /> Importar
+                  </Link>
+                </span>
               )}
             </li>
           ))}
