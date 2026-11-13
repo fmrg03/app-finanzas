@@ -9,7 +9,7 @@ import { ThemeToggle } from '@/components/theme-toggle';
 import { ensureSession, logout } from '@/lib/api';
 import { cn, rate } from '@/lib/format';
 import { isMoreSection, NAV_GROUPS, NAV_MOBILE } from '@/lib/nav';
-import { useLatestRates } from '@/lib/queries';
+import { useLatestRates, useMe } from '@/lib/queries';
 import { RATE_LABEL } from '@/lib/types';
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -36,10 +36,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 function Sidebar() {
   const path = usePathname();
   const router = useRouter();
+  const { data: me } = useMe();
   return (
     <aside className="sticky top-0 hidden h-dvh flex-col overflow-y-auto border-r border-line bg-surface px-4 py-6 md:flex">
       <div className="flex items-center justify-between pl-2">
-        <span className="text-xl font-extrabold tracking-tight">Finanzas</span>
+        <div className="min-w-0">
+          <span className="block text-xl font-extrabold tracking-tight">Finanzas</span>
+          {me && <span className="block truncate text-sm text-muted" title={me.email}>{me.name?.trim() || me.email.split('@')[0]}</span>}
+        </div>
         <div className="flex items-center">
           <ThemeToggle />
           <NotificationBell />
