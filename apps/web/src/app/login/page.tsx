@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Button, ErrorNote, Field, Input } from '@/components/ui/controls';
 import { ensureSession, login } from '@/lib/api';
+import { markUnlocked } from '@/lib/lock';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -28,6 +29,8 @@ export default function LoginPage() {
     setError(null);
     try {
       await login(String(fd.get('email')), String(fd.get('password')));
+      // Con la contraseña ya no hace falta el PIN en esta sesión
+      markUnlocked();
       router.replace('/resumen');
     } catch (err) {
       setError((err as Error).message);

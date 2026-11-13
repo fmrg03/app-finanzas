@@ -4,6 +4,7 @@ import { LogOut } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type ReactNode } from 'react';
+import { LockGate } from '@/components/lock-screen';
 import { NotificationBell, NotificationToasts } from '@/components/notifications';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { ensureSession, logout } from '@/lib/api';
@@ -23,6 +24,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   if (!ready) return null;
   return (
+    <LockGate>
     <div className="md:grid md:grid-cols-[15rem_1fr]">
       <Sidebar />
       <MobileHeader />
@@ -30,6 +32,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <BottomNav />
       <NotificationToasts />
     </div>
+    </LockGate>
   );
 }
 

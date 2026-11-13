@@ -1,12 +1,13 @@
 'use client';
 
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronRight, Copy, FileSpreadsheet, LogOut, Tags, Zap } from 'lucide-react';
+import { ChevronRight, Copy, FileSpreadsheet, Fingerprint, Lock, LogOut, Tags, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { FamilySection } from '@/components/family-section';
 import { Button, ErrorNote, Field, Input, Segmented } from '@/components/ui/controls';
+import { biometricAvailable, biometricLabel, checkPin, clearLock, createLock, getLock, markUnlocked, registerBiometric, saveLock, type LockConfig } from '@/lib/lock';
 import { useTheme, type ThemeChoice } from '@/lib/theme';
 import { api, downloadFile, logout } from '@/lib/api';
 import { useMe, useReceiptsStatus, type Me } from '@/lib/queries';
@@ -25,6 +26,7 @@ export default function AjustesPage() {
       {me && <Preferences me={me} />}
 
       <QuickEntry />
+      {me && <AppLock me={me} />}
       <ExportAll />
       {me && <FamilySection isAdmin={me.role === 'ADMIN'} />}
 
@@ -217,6 +219,136 @@ function ExportAll() {
       <Button className="mt-3" variant="ghost" onClick={() => void go()} disabled={busy}>
         <FileSpreadsheet size={16} /> {busy ? 'Preparando…' : 'Descargar Excel'}
       </Button>
+    </section>
+  );
+}
+
+const TIMEOUTS = [{ v: 1, l: '1 minuto' }, { v: 5, l: '5 minutos' }, { v: 15, l: '15 minutos' }, { v: 60, l: '1 hora' }];
+
+/** Bloqueo con PIN y huella / Face ID, solo en este dispositivo. */
+function AppLock({ me }: { me: Me }) {
+  const [cfg, setCfg] = useState<LockConfig | null>(null);
+  const [bioOk, setBioOk] = useState(false);
+  const [mode, setMode] = useState<'view' | 'setup' | 'off'>('view');
+  const [pin, setPin] = useState('');
+  const [pin2, setPin2] = useState('');
+  const [timeout, setTimeoutMin] = useState(5);
+  const [useBio, setUseBio] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [secure, setSecure] = useState(true);
+  const bio = biometricLabel();
+  useEffect(() => {
+    setSecure(window.isSecureContext && !!crypto.subtle);
+    setCfg(getLock(me.id));
+    void biometricAvailable().then(setBioOk);
+  }, [me.id]);
+  const update = (c: LockConfig | null) => { if (c) saveLock(c); else clearLock(); setCfg(c); };
+
+  async function activate(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!/^\d{4,6}$/.test(pin)) return setError('El PIN debe tener de 4 a 6 números');
+    if (pin !== pin2) return setError('Los PIN no coinciden');
+    setBusy(true);
+    try {
+      let credId: string | null = null;
+      if (bioOk && useBio) {
+        try { credId = await registerBiometric(me); } catch { setError(`No se activó ${bio}; queda solo el PIN. Puedes intentarlo después.`); }
+      }
+      update(await createLock(me.id, pin, timeout, credId));
+      markUnlocked();
+      setMode('view'); setPin(''); setPin2('');
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function deactivate(e: FormEvent) {
+    e.preventDefault();
+    if (!cfg) return;
+    const r = await checkPin(cfg, pin);
+    if (!r.ok) { setCfg(getLock(me.id)); return setError(`PIN incorrecto (te quedan ${r.left} intentos)`); }
+    update(null); setMode('view'); setPin(''); setError(null);
+  }
+  async function addBio() {
+    if (!cfg) return;
+    setError(null);
+    try { update({ ...cfg, credId: await registerBiometric(me) }); } catch { setError(`No se pudo activar ${bio}`); }
+  }
+
+  return (
+    <section aria-labelledby="bloqueo" className="mt-4 rounded-2xl bg-surface p-5">
+      <h2 id="bloqueo" className="flex items-center gap-2 font-bold"><Lock size={18} className="text-accent" /> Bloqueo de la app</h2>
+      <p className="mt-1 text-sm text-muted">
+        Pide un PIN{bioOk ? ` o ${bio}` : ''} al abrir la app y cuando vuelves después de un rato. Se configura en cada teléfono o computadora por separado.
+      </p>
+      {error && <div className="mt-3"><ErrorNote>{error}</ErrorNote></div>}
+
+      {cfg && mode === 'view' && (
+        <div className="mt-3 flex flex-col gap-3 text-sm">
+          <p className="font-semibold text-income">Activo en este dispositivo{cfg.credId ? ` · con ${bio}` : ''}</p>
+          <Field label="Volver a bloquear tras">
+            <select
+              value={cfg.timeoutMin}
+              onChange={(e) => update({ ...cfg, timeoutMin: Number(e.target.value) })}
+              className="h-11 rounded-xl border border-line bg-surface px-3"
+            >
+              {TIMEOUTS.map((t) => <option key={t.v} value={t.v}>{t.l} en segundo plano</option>)}
+            </select>
+          </Field>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="ghost" onClick={() => window.dispatchEvent(new Event('fz-lock'))}><Lock size={16} /> Bloquear ahora</Button>
+            {bioOk && !cfg.credId && <Button variant="ghost" onClick={() => void addBio()}><Fingerprint size={16} /> Usar {bio}</Button>}
+            {cfg.credId && <Button variant="ghost" onClick={() => update({ ...cfg, credId: null })}>Quitar {bio}</Button>}
+            <Button variant="danger" onClick={() => { setMode('off'); setError(null); }}>Desactivar</Button>
+          </div>
+        </div>
+      )}
+
+      {cfg && mode === 'off' && (
+        <form onSubmit={deactivate} className="mt-3 flex flex-wrap items-end gap-2">
+          <Field label="Tu PIN actual" className="w-40">
+            <Input type="password" inputMode="numeric" autoComplete="off" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} autoFocus />
+          </Field>
+          <Button type="submit" variant="danger">Desactivar bloqueo</Button>
+          <Button type="button" variant="ghost" onClick={() => { setMode('view'); setPin(''); setError(null); }}>Cancelar</Button>
+        </form>
+      )}
+
+      {!cfg && !secure && (
+        <p className="mt-3 rounded-xl bg-warning-soft px-3 py-2 text-sm text-warning">
+          Para usar el bloqueo abre la app con https (por ejemplo la dirección .ts.net de Tailscale); con http el navegador no permite guardar el PIN de forma segura.
+        </p>
+      )}
+      {!cfg && secure && mode !== 'setup' && <Button className="mt-3" variant="ghost" onClick={() => setMode('setup')}><Lock size={16} /> Activar bloqueo</Button>}
+
+      {!cfg && mode === 'setup' && (
+        <form onSubmit={activate} className="mt-3 flex flex-col gap-3">
+          <div className="flex gap-2">
+            <Field label="PIN (4 a 6 números)" className="flex-1">
+              <Input type="password" inputMode="numeric" autoComplete="off" maxLength={6} value={pin} onChange={(e) => setPin(e.target.value.replace(/\D/g, ''))} autoFocus />
+            </Field>
+            <Field label="Repítelo" className="flex-1">
+              <Input type="password" inputMode="numeric" autoComplete="off" maxLength={6} value={pin2} onChange={(e) => setPin2(e.target.value.replace(/\D/g, ''))} />
+            </Field>
+          </div>
+          <Field label="Volver a bloquear tras">
+            <select value={timeout} onChange={(e) => setTimeoutMin(Number(e.target.value))} className="h-11 rounded-xl border border-line bg-surface px-3">
+              {TIMEOUTS.map((t) => <option key={t.v} value={t.v}>{t.l} en segundo plano</option>)}
+            </select>
+          </Field>
+          {bioOk && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={useBio} onChange={(e) => setUseBio(e.target.checked)} className="size-4 accent-accent" />
+              Usar también {bio}
+            </label>
+          )}
+          <div className="flex gap-2">
+            <Button type="submit" disabled={busy}>{busy ? 'Activando…' : 'Activar'}</Button>
+            <Button type="button" variant="ghost" onClick={() => { setMode('view'); setPin(''); setPin2(''); setError(null); }}>Cancelar</Button>
+          </div>
+        </form>
+      )}
     </section>
   );
 }
